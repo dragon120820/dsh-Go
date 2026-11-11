@@ -25,7 +25,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ios-ipa-${{ github.ref }}
@@ -116,3 +116,15 @@ jobs:
           path: ${{ runner.temp }}/DSH-Go-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish the IPA as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="ios-unsigned-${{ github.run_number }}"
+          gh release create "$tag" "$RUNNER_TEMP/DSH-Go-unsigned.ipa#DSH-Go-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Unsigned iOS build ($BUILD_REF)" \
+            --notes "Unsigned .ipa built from ccch1mneyyy/dsh-Go@$BUILD_REF at $GITHUB_SHA, engine=$BUILD_ENGINE. Sideloading needs a personal Apple ID (AltStore, Sideloadly, or Xcode); a free Personal Team signature expires after 7 days."
+          echo "::notice title=release::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
