@@ -6,27 +6,44 @@
 name: Publish an existing IPA artifact
 
 on:
+  # Re-push this file to republish the run named in DEFAULT_RUN_ID without a token
+  # that can dispatch workflows.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-ipa-publish.yml'
   workflow_dispatch:
     inputs:
       run_id:
         description: 'Run id of the iOS IPA (unsigned) build to republish'
         type: string
-        required: true
+        default: '43069973407'
 
 permissions:
   contents: write
   actions: read
+
+env:
+  # The first successful IPA build on this fork.
+  DEFAULT_RUN_ID: '43069973407'
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Resolve the run id
+        run: |
+          run_id="${{ inputs.run_id }}"
+          [ -n "$run_id" ] || run_id="$DEFAULT_RUN_ID"
+          echo "RUN_ID=$run_id" >> "$GITHUB_ENV"
+          echo "republishing run $run_id"
+
       - name: Download the artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ inputs.run_id }}" \
+          gh run download "$RUN_ID" \
             --repo "$GITHUB_REPOSITORY" \
             --name DSH-Go-unsigned-ipa \
             --dir out
@@ -37,11 +54,12 @@ jobs:
       - name: Publish it
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id }}
         run: |
           tag="ios-unsigned-run${RUN_ID}"
           gh release create "$tag" "out/DSH-Go-unsigned.ipa#DSH-Go-unsigned.ipa" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Unsigned iOS build (run ${RUN_ID})" \
-            --notes "Unsigned .ipa republished from workflow run ${RUN_ID}. Signing needs a personal Apple ID (AltStore, Sideloadly, or Xcode); a free Personal Team signature expires after 7 days."
+            --notes "Unsigned .ipa republished from workflow run ${RUN_ID}. Signing needs a personal Apple ID (AltStore, Sideloadly, or Xcode); a free Personal Team signature expires after 7 days." \
+          || gh release upload "$tag" "out/DSH-Go-unsigned.ipa#DSH-Go-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" --clobber
           echo "::notice title=release::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
