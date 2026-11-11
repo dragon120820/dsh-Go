@@ -90,7 +90,8 @@ export function createCompanionStore({ filePath, now = Date.now, io = fs } = {})
   async function read(at) {
     let handle;
     try {
-      handle = await io.open(path, "r");
+      // Reach the file-type check without waiting for a FIFO writer.
+      handle = await io.open(path, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > MAX_FILE_BYTES) throw corrupt();
       // Bounded even if an external editor grows the file after stat().

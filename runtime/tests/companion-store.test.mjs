@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as fs from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -269,6 +270,36 @@ test('duplicate persisted memory IDs differing only by case are rejected without
   await rejects(() => f.store.getMemories(), 503, 'corrupt-store');
   assert.deepEqual(await fs.readFile(f.filePath), corruptBytes);
 });
+
+test('a FIFO store is rejected without waiting for a writer and does not block later reads',
+  { skip: process.platform !== 'linux' }, async (t) => {
+    const f = await fixture(t);
+    await fs.mkdir(dirname(f.filePath), { recursive: true });
+    execFileSync('mkfifo', [f.filePath]);
+    let settled = false;
+    const result = f.store.getSnapshot().then((value) => ({ value }), (error) => ({ error }))
+      .finally(() => { settled = true; });
+    let timer;
+    try {
+      const observed = await Promise.race([result, new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), 2000);
+      })]);
+      assert.notEqual(observed, null, 'file type validation must not wait for a FIFO writer');
+      assert.equal(observed.error?.status, 503);
+      assert.equal(observed.error?.code, 'companion/corrupt-store');
+      assert.equal((await fs.lstat(f.filePath)).isFIFO(), true, 'leave the invalid store untouched');
+    } finally {
+      clearTimeout(timer);
+      if (!settled) {
+        // Release a blocked old reader even when the regression assertion fails.
+        const peer = await fs.open(f.filePath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+        try { await result; } finally { await peer.close(); }
+      }
+    }
+    await fs.unlink(f.filePath);
+    assert.equal((await f.store.getSnapshot()).revision, 0);
+    assert.equal((await fs.stat(f.filePath)).isFile(), true);
+  });
 
 test('rename failure preserves the old file and revision, removes temporary data and permits retry', async (t) => {
   const f = await fixture(t);
