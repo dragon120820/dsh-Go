@@ -142,7 +142,10 @@ else
 fi
 for _ in $(seq 1 40); do kill -0 "$BG" 2>/dev/null || break; sleep 0.25; done
 if kill -0 "$BG" 2>/dev/null; then fail "still running 10s after SIGTERM"; kill -KILL "$BG"
-else rc=0; wait "$BG" || rc=$?; pass "dsh exited after SIGTERM (rc=$rc)"; fi
+else
+  rc=0; wait "$BG" || rc=$?
+  [[ $rc == 0 ]] && pass "dsh exited after SIGTERM (rc=$rc)" || fail "dsh exited after SIGTERM (rc=$rc)"
+fi
 
 echo "== dsh web offline (no network namespace access)"
 LOG2="$HERE/.work/$ABI/dsh-web-offline.log"
