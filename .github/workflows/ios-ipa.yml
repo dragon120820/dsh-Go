@@ -7,6 +7,12 @@
 name: iOS IPA (unsigned)
 
 on:
+  # Re-push this file (or change the defaults below) to rebuild from the Actions tab
+  # without a token that can dispatch workflows.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-ipa.yml'
   workflow_dispatch:
     inputs:
       ref:
@@ -25,6 +31,11 @@ concurrency:
   group: ios-ipa-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Defaults for the `push` trigger, where there are no inputs.
+  DEFAULT_REF: feat/ios-foundation
+  DEFAULT_ENGINE: 'false'
+
 jobs:
   ipa:
     runs-on: macos-26
@@ -33,10 +44,20 @@ jobs:
       FLUTTER_VERSION: 3.47.7
       FLUTTER_SHA256: dd9da574c3168460550117eb0e8dd0313ae934fabf64a82a6d557fff5fd1422e
     steps:
+      - name: Resolve the build parameters
+        run: |
+          ref="${{ inputs.ref }}"
+          engine="${{ inputs.engine }}"
+          [ -n "$ref" ] || ref="$DEFAULT_REF"
+          [ -n "$engine" ] || engine="$DEFAULT_ENGINE"
+          echo "BUILD_REF=$ref" >> "$GITHUB_ENV"
+          echo "BUILD_ENGINE=$engine" >> "$GITHUB_ENV"
+          echo "building $ref, engine=$engine"
+
       - uses: actions/checkout@v4
         with:
           repository: ccch1mneyyy/dsh-Go
-          ref: ${{ inputs.ref }}
+          ref: ${{ env.BUILD_REF }}
           persist-credentials: false
 
       - name: Show the toolchain
@@ -59,7 +80,7 @@ jobs:
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
 
       - name: Prepare the on-device engine
-        if: ${{ inputs.engine }}
+        if: ${{ env.BUILD_ENGINE == 'true' }}
         run: |
           python3 --version
           bash tooling/ios/prepare-engine.sh
@@ -86,7 +107,7 @@ jobs:
           cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
           (cd "$RUNNER_TEMP/ipa" && /usr/bin/ditto -c -k --keepParent Payload "$RUNNER_TEMP/DSH-Go-unsigned.ipa")
           ls -lh "$RUNNER_TEMP/DSH-Go-unsigned.ipa"
-          echo "::notice title=ipa::$(du -h "$RUNNER_TEMP/DSH-Go-unsigned.ipa" | cut -f1) from ${{ inputs.ref }}"
+          echo "::notice title=ipa::$(du -h "$RUNNER_TEMP/DSH-Go-unsigned.ipa" | cut -f1) from $BUILD_REF, engine=$BUILD_ENGINE"
 
       - name: Keep the unsigned IPA
         uses: actions/upload-artifact@v4
