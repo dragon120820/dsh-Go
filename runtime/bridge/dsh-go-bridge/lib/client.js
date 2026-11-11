@@ -258,6 +258,7 @@ window.__ModuleLoader__.load({
 			 * cell), its kind, or one of its guide entry ids. Waits up to `timeoutMs` (default 15 s) for a
 			 * conversation to be on screen, expands the column and resolves once the tab is active.
 			 */
+			let disposed = false;
 			const openTab = async (target, options = {}) => {
 				const deadline = Date.now() + (finite(options.timeoutMs) || 15000);
 				const find = () => {
@@ -268,7 +269,7 @@ window.__ModuleLoader__.load({
 				let type;
 				let opened = false;
 				let lastError = "no-sidebar";
-				while (Date.now() <= deadline) {
+				while (!disposed && Date.now() <= deadline) {
 					const sidebar = ctx.get("sidebarRight");
 					type = type || find();
 					if (sidebar && type) {
@@ -289,7 +290,7 @@ window.__ModuleLoader__.load({
 					}
 					await sleep(200);
 				}
-				return { ok: false, reason: lastError };
+				return { ok: false, reason: disposed ? "disposed" : lastError };
 			};
 			const pendingTab = hashParam("dsh-go-tab");
 			if (pendingTab) {
@@ -379,6 +380,7 @@ window.__ModuleLoader__.load({
 					openTab,
 				};
 				return () => {
+					disposed = true;
 					delete window.__dshGoBridge;
 					for (const dispose of maskedSlots.values()) {
 						try { dispose(); } catch {}
