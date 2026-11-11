@@ -2,20 +2,27 @@
 
     python3 -m unittest discover -s tooling -p test_setup_toolchain.py -v
 """
+from contextlib import contextmanager
 from pathlib import Path
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPT = Path(__file__).resolve().parent / "setup-toolchain.sh"
 PAYLOAD = b"local toolchain fixture, not an archive\n"
+CACHE_NAMES = {
+    "flutter": "flutter_linux_3.47.7-stable.tar.xz",
+    "cmdline": "commandlinetools-linux-13114758_latest.zip",
+}
 DISPATCH = r'''#!INTERPRETER
 from pathlib import Path
-import json, os, shutil, sys
+import json, os, shutil, signal, sys
 name, args = Path(sys.argv[0]).name, sys.argv[1:]
 root = Path(os.environ['TOOLCHAIN_TEST_ROOT'])
 dev, scenario = root / 'dev', os.environ['TOOLCHAIN_TEST_SCENARIO']
@@ -34,6 +41,14 @@ if name == 'curl':
         if scenario == 'downstream-failure' and 'Adoptium' in url:
             print('fixture: JDK download failed (23)', file=sys.stderr)
             raise SystemExit(23)
+        transfer = os.environ.get('TOOLCHAIN_TEST_TRANSFER')
+        destination = Path(args[args.index('-o') + 1])
+        if transfer in ('partial', 'hold', 'bad-digest'):
+            destination.write_bytes(b'partial')
+            if transfer == 'hold':
+                (root / 'transfer-ready').write_text('1')
+                while True: signal.pause()
+            raise SystemExit(0 if transfer == 'bad-digest' else 18)
         Path(args[args.index('-o') + 1]).write_bytes(b'local toolchain fixture, not an archive\n')
 elif name == 'tar':
     if '-xzf' in args:
@@ -51,6 +66,9 @@ elif name == 'tar':
             raise SystemExit(23)
     else: raise SystemExit(97)
 elif name == 'unzip':
+    if Path(args[-1]).read_bytes() != b'local toolchain fixture, not an archive\n':
+        print('fixture: cached archive is incomplete (9)', file=sys.stderr)
+        raise SystemExit(9)
     program(dev / '.downloads/cmdline-tools/bin/sdkmanager')
     if scenario in ('cmdline-failure', 'multiple-failures'):
         code = 29 if scenario == 'multiple-failures' else 23
@@ -80,7 +98,8 @@ def prepared_flutter(root):
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux shell toolchain test")
 class SetupToolchainTest(unittest.TestCase):
-    def run_script(self, scenario):
+    @contextmanager
+    def fixture(self, scenario):
         with tempfile.TemporaryDirectory(prefix="toolchain-shell-test-") as tmp:
             root = Path(tmp)
             script = root / "repo/tooling/setup-toolchain.sh"
@@ -89,23 +108,126 @@ class SetupToolchainTest(unittest.TestCase):
             program(root / "bin/dispatch")
             for name in ("curl", "tar", "unzip", "java", "flutter", "sdkmanager"):
                 program(root / "bin" / name)
-            if scenario in ("flutter-failure", "cmdline-failure"):
+            if scenario in ("flutter-failure", "cmdline-failure", "cache-flutter", "cache-cmdline"):
                 program(root / "dev/jdk-17/bin/java")
-            if scenario != "flutter-failure":
+            if scenario not in ("flutter-failure", "cache-flutter"):
                 prepared_flutter(root)
-            if scenario not in ("cmdline-failure", "multiple-failures"):
+            if scenario not in ("cmdline-failure", "multiple-failures", "cache-cmdline"):
                 program(root / "dev/android-sdk/cmdline-tools/latest/bin/sdkmanager")
             env = dict(os.environ, DEV_ROOT=str(root / "dev"),
+                       FLUTTER_VERSION="3.47.7", CMDLINE_TOOLS_BUILD="13114758",
                        FLUTTER_SHA256=hashlib.sha256(PAYLOAD).hexdigest(),
                        PATH=str(root / "bin") + os.pathsep + os.environ.get("PATH", ""),
                        TOOLCHAIN_TEST_ROOT=str(root), TOOLCHAIN_TEST_SCENARIO=scenario)
             env.pop("BASH_ENV", None)
             env.pop("ENV", None)
-            result = subprocess.run(["bash", str(script)], cwd=root, env=env,
-                                    text=True, capture_output=True, timeout=10)
-            calls = [json.loads(line) for line in (root / "trace.jsonl").read_text().splitlines()]
-            return {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
-                    "env_written": (script.parent / "env.sh").exists(), "calls": calls}
+            env.pop("TOOLCHAIN_TEST_TRANSFER", None)
+            (root / "trace.jsonl").touch()
+            yield root, script, env
+
+    def invoke(self, root, script, env):
+        trace = root / "trace.jsonl"
+        start = len(trace.read_text().splitlines())
+        result = subprocess.run(["bash", str(script)], cwd=root, env=env,
+                                text=True, capture_output=True, timeout=10)
+        calls = [json.loads(line) for line in trace.read_text().splitlines()[start:]]
+        return {"exit": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
+                "env_written": (script.parent / "env.sh").exists(), "calls": calls}
+
+    def run_script(self, scenario):
+        with self.fixture(scenario) as (root, script, env):
+            return self.invoke(root, script, env)
+
+    def assert_download_retry(self, target):
+        with self.fixture("cache-" + target) as (root, script, env):
+            cache = root / "dev/.downloads" / CACHE_NAMES[target]
+            env["TOOLCHAIN_TEST_TRANSFER"] = "partial"
+            first = self.invoke(root, script, env)
+            first_files = list(cache.parent.iterdir())
+            env["TOOLCHAIN_TEST_TRANSFER"] = "complete"
+            retry = self.invoke(root, script, env)
+            self.assertEqual(first["exit"], 18, first["stderr"])
+            self.assertFalse(first["env_written"])
+            self.assertEqual(first_files, [], f"retry exit={retry['exit']}: {retry['stderr']}")
+            self.assertEqual(retry["exit"], 0, retry["stderr"])
+            self.assertTrue(retry["env_written"])
+            self.assertEqual(cache.read_bytes(), PAYLOAD)
+            self.assertEqual(list(cache.parent.iterdir()), [cache])
+            for result in (first, retry):
+                self.assertEqual(sum(c["command"] == "curl" for c in result["calls"]), 1)
+
+    def test_flutter_partial_download_can_retry_without_manual_cache_removal(self):
+        self.assert_download_retry("flutter")
+
+    def test_cmdline_partial_download_can_retry_without_manual_cache_removal(self):
+        self.assert_download_retry("cmdline")
+
+    def test_existing_complete_caches_are_reused_without_download(self):
+        for target, name in CACHE_NAMES.items():
+            with self.subTest(target=target), self.fixture("cache-" + target) as (root, script, env):
+                cache = root / "dev/.downloads" / name
+                cache.parent.mkdir(parents=True)
+                cache.write_bytes(PAYLOAD)
+                env["TOOLCHAIN_TEST_TRANSFER"] = "partial"
+                result = self.invoke(root, script, env)
+                self.assertEqual(result["exit"], 0, result["stderr"])
+                self.assertEqual(cache.read_bytes(), PAYLOAD)
+                self.assertFalse(any(c["command"] == "curl" for c in result["calls"]))
+                self.assertEqual(list(cache.parent.iterdir()), [cache])
+
+    def test_historical_bad_caches_are_preserved_and_still_rejected(self):
+        for target, name in CACHE_NAMES.items():
+            with self.subTest(target=target), self.fixture("cache-" + target) as (root, script, env):
+                cache = root / "dev/.downloads" / name
+                cache.parent.mkdir(parents=True)
+                cache.write_bytes(b"partial")
+                result = self.invoke(root, script, env)
+                self.assertEqual(result["exit"], 1 if target == "flutter" else 9)
+                self.assertEqual(cache.read_bytes(), b"partial")
+                self.assertFalse(result["env_written"])
+                self.assertFalse(any(c["command"] == "curl" for c in result["calls"]))
+                self.assertEqual(list(cache.parent.iterdir()), [cache])
+
+    def test_terminated_download_removes_only_its_temporary_file(self):
+        for target, name in CACHE_NAMES.items():
+            with self.subTest(target=target), self.fixture("cache-" + target) as (root, script, env):
+                cache = root / "dev/.downloads" / name
+                cache.parent.mkdir(parents=True)
+                sentinel = cache.parent / "unrelated-cache"
+                sentinel.write_bytes(b"keep")
+                env["TOOLCHAIN_TEST_TRANSFER"] = "hold"
+                process = subprocess.Popen(["bash", str(script)], cwd=root, env=env,
+                                           text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 5
+                    while not (root / "transfer-ready").exists() and process.poll() is None:
+                        if time.monotonic() >= deadline:
+                            self.fail("local transfer stand-in did not reach its interruption gate")
+                        time.sleep(.01)
+                    self.assertTrue((root / "transfer-ready").exists())
+                    os.killpg(process.pid, signal.SIGTERM)
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertNotEqual(process.returncode, 0, stdout + stderr)
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate(timeout=10)
+                self.assertEqual(list(cache.parent.iterdir()), [sentinel])
+                self.assertEqual(sentinel.read_bytes(), b"keep")
+                self.assertFalse((script.parent / "env.sh").exists())
+
+    def test_complete_transfer_with_bad_flutter_digest_remains_rejected(self):
+        with self.fixture("cache-flutter") as (root, script, env):
+            env["TOOLCHAIN_TEST_TRANSFER"] = "bad-digest"
+            result = self.invoke(root, script, env)
+            cache = root / "dev/.downloads" / CACHE_NAMES["flutter"]
+            self.assertEqual(result["exit"], 1)
+            self.assertEqual(cache.read_bytes(), b"partial")
+            self.assertEqual(list(cache.parent.iterdir()), [cache])
+            self.assertFalse(result["env_written"])
 
     def assert_stopped(self, scenario, code):
         result = self.run_script(scenario)
