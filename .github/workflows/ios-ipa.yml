@@ -9,8 +9,9 @@
 # release, so a sideloading tool can fetch it without a GitHub session.
 #
 # macos-26 capacity is tight: a run can sit queued for ~15 minutes and then be
-# cancelled before it starts. Runs are therefore not cancelled by newer pushes —
-# re-pushing this file queues one more attempt instead of dropping the pending one.
+# cancelled before it starts ("The job was not acquired by Runner"). Runs are not
+# cancelled by newer pushes, so re-pushing this file queues one more attempt
+# instead of dropping the pending one.
 name: iOS IPA (unsigned)
 
 on:
