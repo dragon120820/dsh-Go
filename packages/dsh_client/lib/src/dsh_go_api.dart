@@ -756,8 +756,9 @@ extension DshGoApi on DshClient {
     Duration timeout = const Duration(seconds: 8),
   }) async {
     final path = dshGoViewPath(pkg, id);
-    final response = await _dshGoConnection(path)
-        .get(path, query: {...caps.query, ...scope.toJson()}, timeout: timeout);
+    final response = await _dshGoConnection(
+      path,
+    ).get(path, query: {...caps.query, ...scope.toJson()}, timeout: timeout);
     if (response.statusCode != 200) throw _dshGoHttpError(path, response);
     final json = tryDecodeJson(response.text);
     if (asMap(json) == null) throw DshProtocolException('$path: not a view object');
@@ -771,8 +772,9 @@ extension DshGoApi on DshClient {
     Duration timeout = const Duration(seconds: 8),
   }) async {
     final watch = Stopwatch()..start();
-    final response = await _dshGoConnection(dshGoInvokePath)
-        .postJson(dshGoInvokePath, invocation.toJson(), timeout: timeout);
+    final response = await _dshGoConnection(
+      dshGoInvokePath,
+    ).postJson(dshGoInvokePath, invocation.toJson(), timeout: timeout);
     watch.stop();
     if (response.statusCode != 200) throw _dshGoHttpError(dshGoInvokePath, response);
     final json = tryDecodeJson(response.text);
@@ -862,8 +864,9 @@ extension DshGoApi on DshClient {
     }
     String segments(String s) => s.split('/').map((p) => Uri.encodeComponent(p).replaceAll('%40', '@')).join('/');
     final path = '/dsh-go/v1/media/${segments(pkg)}/${Uri.encodeComponent(id)}';
-    final response = await _dshGoConnection(path)
-        .getBounded(path, query: {'lease': lease, 'key': ?key}, maxBytes: maxBytes, timeout: timeout);
+    final response = await _dshGoConnection(
+      path,
+    ).getBounded(path, query: {'lease': lease, 'key': ?key}, maxBytes: maxBytes, timeout: timeout);
     if (response.statusCode != 200) throw _dshGoHttpError(path, response);
     final type = response.contentType;
     if (response.body.isEmpty || !dshGoAudioTypes.contains(type)) {
