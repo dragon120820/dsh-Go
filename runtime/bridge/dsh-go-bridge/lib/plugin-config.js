@@ -273,13 +273,14 @@ export function createPluginConfig(ctx,{readBody,send}){
  }
  async function update(id,input){
   if(!record(input)||Object.keys(input).some(k=>!['revision','ops'].includes(k))||typeof input.revision!=='string'||input.revision.length>256||!Array.isArray(input.ops)||!input.ops.length||input.ops.length>128)throw fault(400,'invalid-operation');
-  const before=await snapshot(id),editor=service(),bytes=fileBytes(editor.documentPath),oldRaw=structuredClone(before.row.entry.options.config??{});let changed=false;
+  const before=await snapshot(id),editor=service();let changed=false,bytes,oldRaw;
   if(editor.dshGoAsyncChange!==true)throw fault(503,'host-unavailable');
   if(!before.body.writable)throw fault(409,'overridden');
   try{await editor.edit(before.row.entry,async(raw,inherited)=>{
    const current=await snapshot(id);if(!current.body.writable)throw fault(409,'overridden');if(current.row.entry!==before.row.entry||current.body.revision!==input.revision)throw fault(409,'conflict');
    const next=operations(current.row.graph,raw,inherited,input.ops,current.body.value);
    try{current.row.schema(next);}catch(error){throw fault(422,'invalid-config',validationPath(error,input.ops));}
+   try{bytes=fileBytes(editor.documentPath);oldRaw=structuredClone(raw);}catch{throw fault(503,'host-unavailable');}
    changed=true;return next;
   });}catch(error){
    if(FAULTS.has(error))throw error;
