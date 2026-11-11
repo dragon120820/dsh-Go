@@ -23,14 +23,17 @@ it the app derives GitHub download URLs from the tag and asset names.
 
 import argparse
 import datetime
+import errno
 import hashlib
 import json
 import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 import apk_delta
@@ -120,6 +123,37 @@ def sha256(path: pathlib.Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def copy_asset(source: pathlib.Path, target: pathlib.Path) -> None:
+    """Publish an ordinary asset whole; preserve copyfile's special-path semantics."""
+    staging = None
+    try:
+        existing = target.lstat()
+    except FileNotFoundError:
+        existing = None
+    in_place = existing is not None and (
+        not stat.S_ISREG(existing.st_mode) or existing.st_nlink != 1 or os.path.samefile(source, target)
+    )
+    if not in_place:
+        if existing is not None:
+            os.close(os.open(target, os.O_WRONLY))  # check write permission without truncating or requiring a read
+        try:
+            staging = tempfile.TemporaryDirectory(prefix=".dsh-release-", dir=target.parent)
+        except OSError as error:
+            # Keep the old writable-file path when only the parent disallows a new entry.
+            if existing is None or error.errno != errno.EACCES:
+                raise
+    try:
+        output = pathlib.Path(staging.name) / target.name if staging else target
+        shutil.copyfile(source, output)
+        if staging:
+            if existing is not None:
+                output.chmod(stat.S_IMODE(existing.st_mode))
+            os.replace(output, target)
+    finally:
+        if staging:
+            staging.cleanup()
 
 
 def gh(*args: str) -> str:
@@ -256,7 +290,7 @@ def main() -> None:
     for flavor, path in sources.items():
         asset = f"dsh-go-{name}-{flavor}.apk"
         target = args.out / asset
-        shutil.copyfile(path, target)
+        copy_asset(path, target)
         digest = sha256(target)
         sums.append(f"{digest}  {asset}")
         entry = {"name": asset, "size": target.stat().st_size, "sha256": digest}

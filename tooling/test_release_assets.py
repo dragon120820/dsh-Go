@@ -12,6 +12,8 @@ import os
 import pathlib
 import random
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -103,6 +105,184 @@ class ReleaseBuildTest(unittest.TestCase):
                 "platformBuildVersionName='16'\nminSdkVersion:'26'\n")
         m = BADGING_RE.search(line)
         self.assertEqual((m.group(1), m.group(2)), ("10251234", "1.2.0-beta.1"))
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Linux asset publication checks")
+class AssetCopyTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="release-copy-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.dir = pathlib.Path(self.temp.name)
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+        aapt2 = self.bin / "aapt2"
+        aapt2.write_text(
+            f"#!{sys.executable}\nimport sys\nassert sys.argv[1:3] == ['dump', 'badging']\n"
+            "print(\"package: name='io.github.ccch1mneyyy.dsh_app' versionCode='10251234' versionName='1.2.0'\")\n"
+        )
+        aapt2.chmod(0o755)
+        self.source = apk(self.dir / "input.apk", 1)
+        self.out = self.dir / "dist"
+        self.target = self.out / "dsh-go-1.2.0-arm64.apk"
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
+                        PYTHONDONTWRITEBYTECODE="1")
+
+    def prepare(self, *, source=None, limit=None, umask=0o022):
+        def setup_child():
+            os.umask(umask)
+            if limit is not None:
+                import resource
+                signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+                resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+        script = pathlib.Path(__file__).with_name("release_assets.py")
+        return subprocess.run(
+            [sys.executable, str(script), "--version", "1.2.0+10251234", "--delta-from", "0",
+             "--out", "dist", f"arm64={source or self.source}"],
+            cwd=self.dir, env=self.env, preexec_fn=setup_child, timeout=10,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+
+    def assert_complete(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout)
+        data = self.target.read_bytes()
+        self.assertEqual(data, self.source.read_bytes())
+        digest = hashlib.sha256(data).hexdigest()
+        self.assertEqual((self.out / "SHA256SUMS").read_text(), f"{digest}  {self.target.name}\n")
+        manifest = json.loads((self.out / "update.json").read_text())
+        self.assertEqual(manifest["version"], "1.2.0+10251234")
+        self.assertEqual(manifest["assets"]["arm64"],
+                         {"name": self.target.name, "size": len(data), "sha256": digest})
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()),
+                         sorted([self.target.name, "SHA256SUMS", "update.json"]))
+        return data
+
+    def previous(self):
+        before = self.assert_complete(self.prepare())
+        metadata = {name: (self.out / name).read_bytes() for name in ("SHA256SUMS", "update.json")}
+        apk(self.source, 2)
+        return before, metadata
+
+    def test_copy_failure_keeps_previous_asset_and_metadata(self):
+        before, metadata = self.previous()
+        source = self.source.read_bytes()
+        entries = sorted(p.name for p in self.out.iterdir())
+        result = self.prepare(limit=4096)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[Errno 27]", result.stdout)
+        self.assertEqual(self.target.read_bytes(), before)
+        self.assertEqual(self.source.read_bytes(), source)
+        for name, value in metadata.items():
+            self.assertEqual((self.out / name).read_bytes(), value)
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), entries)
+
+    def test_copy_failure_leaves_no_new_asset(self):
+        result = self.prepare(limit=4096)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[Errno 27]", result.stdout)
+        self.assertFalse(self.target.exists())
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_existing_mode_and_complete_bytes(self):
+        before, _ = self.previous()
+        self.target.chmod(0o640)
+        self.assertNotEqual(self.assert_complete(self.prepare(umask=0o077)), before)
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o640)
+
+    def test_new_asset_respects_umask(self):
+        self.assert_complete(self.prepare(umask=0o027))
+        self.assertEqual(self.target.stat().st_mode & 0o777, 0o640)
+
+    def test_symlink_targets_keep_links(self):
+        for dangling in (False, True):
+            with self.subTest(dangling=dangling):
+                if self.out.exists():
+                    shutil.rmtree(self.out)
+                alias = self.dir / ("missing.apk" if dangling else "linked.apk")
+                if dangling:
+                    self.out.mkdir()
+                else:
+                    self.previous()
+                    self.target.rename(alias)
+                self.target.symlink_to("../" + alias.name)
+                data = self.assert_complete(self.prepare())
+                self.assertTrue(self.target.is_symlink())
+                self.assertEqual(os.readlink(self.target), "../" + alias.name)
+                self.assertEqual(alias.read_bytes(), data)
+
+    def test_hard_link_observes_update_and_retains_failure_behavior(self):
+        self.previous()
+        alias = self.dir / "hard.apk"
+        os.link(self.target, alias)
+        inode = alias.stat().st_ino
+        data = self.assert_complete(self.prepare())
+        self.assertEqual(self.target.stat().st_ino, inode)
+        self.assertEqual(alias.read_bytes(), data)
+        failed = self.prepare(limit=4096)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("[Errno 27]", failed.stdout)
+        self.assertEqual(self.target.stat().st_ino, inode)
+        self.assertEqual(alias.read_bytes(), data[:4096])
+        self.assertEqual(self.target.read_bytes(), data[:4096])
+
+    @unittest.skipIf(sys.platform.startswith("linux") and os.geteuid() == 0, "file permission checks require non-root")
+    def test_readonly_existing_asset_is_not_replaced(self):
+        before, metadata = self.previous()
+        self.target.chmod(0o444)
+        try:
+            result = self.prepare()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("[Errno 13]", result.stdout)
+            self.assertEqual(self.target.read_bytes(), before)
+            self.assertEqual(self.target.stat().st_mode & 0o777, 0o444)
+            for name, value in metadata.items():
+                self.assertEqual((self.out / name).read_bytes(), value)
+        finally:
+            self.target.chmod(0o644)
+
+    @unittest.skipIf(sys.platform.startswith("linux") and os.geteuid() == 0, "directory permission checks require non-root")
+    def test_writable_asset_in_readonly_directory_still_updates(self):
+        before, _ = self.previous()
+        inode = self.target.stat().st_ino
+        self.out.chmod(0o555)
+        try:
+            self.assertNotEqual(self.assert_complete(self.prepare()), before)
+            self.assertEqual(self.target.stat().st_ino, inode)
+        finally:
+            self.out.chmod(0o755)
+
+    @unittest.skipIf(sys.platform.startswith("linux") and os.geteuid() == 0, "write-only permission check requires non-root")
+    def test_writeonly_asset_is_copied_before_the_existing_hash_read_fails(self):
+        _, metadata = self.previous()
+        self.target.chmod(0o222)
+        try:
+            result = self.prepare()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("[Errno 13]", result.stdout)
+            self.assertIn("sha256", result.stdout)  # Existing CLI cannot read the new target digest.
+        finally:
+            self.target.chmod(0o640)
+        self.assertEqual(self.target.read_bytes(), self.source.read_bytes())
+        for name, value in metadata.items():
+            self.assertEqual((self.out / name).read_bytes(), value)
+
+    def test_same_file_is_rejected_without_change(self):
+        before, metadata = self.previous()
+        result = self.prepare(source=self.target)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SameFileError", result.stdout)
+        self.assertEqual(self.target.read_bytes(), before)
+        for name, value in metadata.items():
+            self.assertEqual((self.out / name).read_bytes(), value)
+
+    def test_directory_target_is_preserved(self):
+        self.target.mkdir(parents=True)
+        keep = self.target / "keep"
+        keep.write_bytes(b"existing directory content")
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("IsADirectoryError", result.stdout)
+        self.assertEqual(keep.read_bytes(), b"existing directory content")
+        self.assertEqual(list(self.out.iterdir()), [self.target])
 
 
 class DeltaTest(unittest.TestCase):
