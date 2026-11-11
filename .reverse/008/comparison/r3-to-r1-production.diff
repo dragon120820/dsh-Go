@@ -1,0 +1,52 @@
+--- a/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/runtime/LogRedactor.kt
++++ b/app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/runtime/LogRedactor.kt
+@@ -173,20 +173,13 @@
+                         at = markedEnd
+                     }
+                 }
+-                // Keep the original qualification span when preserving a wrapper.
+-                val scannedValue = text.substring(valueStart, at)
+-                if (quote == null && !cookieHeader && text.getOrNull(match.range.first - 1) == '(' &&
+-                    at > valueStart && text[at - 1] == ')') {
+-                    at--
+-                }
+                 val value = text.substring(valueStart, at)
+                 val secret = SECRET_NAME.containsMatchIn(name)
+                 val authorization = name.endsWith("authorization", true)
+                 val alreadyMasked = value == MARK || (!secret && maskedEnd(value, 0) == value.length) ||
+                     (authorization && (MASKED_AUTH.matches(value) || (quote == null && AUTH_SCHEME.matches(value))))
+                 if (value.isNotEmpty() && !alreadyMasked &&
+-                    (secret || CREDENTIAL_KEY.matches(name) ||
+-                        (scannedValue.length >= 8 && scannedValue.any { it !in '0'..'9' }))) {
++                    (secret || CREDENTIAL_KEY.matches(name) || (value.length >= 8 && value.any { it !in '0'..'9' }))) {
+                     out.append(text, copied, valueStart).append(MARK)
+                     copied = at
+                 }
+--- a/app/lib/diagnostics/redact.dart
++++ b/app/lib/diagnostics/redact.dart
+@@ -176,16 +176,6 @@
+         at = markedEnd;
+       }
+     }
+-    // Keep the original qualification span when preserving a wrapper.
+-    final scannedValue = text.substring(valueStart, at);
+-    if (quote == null &&
+-        !cookieHeader &&
+-        match.start > 0 &&
+-        text[match.start - 1] == '(' &&
+-        at > valueStart &&
+-        text[at - 1] == ')') {
+-      at--;
+-    }
+     final value = text.substring(valueStart, at);
+     final secret = _secretName.hasMatch(name);
+     final authorization = name.toLowerCase().endsWith('authorization');
+@@ -198,7 +188,7 @@
+         !alreadyMasked &&
+         (secret ||
+             _credentialKey.hasMatch(name) ||
+-            (scannedValue.length >= 8 && scannedValue.codeUnits.any((unit) => unit < 0x30 || unit > 0x39)))) {
++            (value.length >= 8 && value.codeUnits.any((unit) => unit < 0x30 || unit > 0x39)))) {
+       out
+         ..write(text.substring(copied, valueStart))
+         ..write(redactionMark);

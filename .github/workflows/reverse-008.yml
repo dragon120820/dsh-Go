@@ -1,0 +1,140 @@
+# Temporary, never merged. Two narrow comparison arms for requestfromweb-008 section C.
+name: reverse-008
+
+on:
+  push:
+    branches: [reverse/refactor2-008]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  GRADLE_VERSION: 9.3.1
+  TZ: Asia/Shanghai
+
+jobs:
+  flutter-arm:
+    name: Flutter arm ${{ matrix.arm }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [r1, r2]
+    env:
+      DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
+      NOTO_CJK_VERSION: 1:20230817+repack1-3
+      NOTO_EMOJI_VERSION: v2.051
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Restore the fonts the goldens were drawn with
+        id: fonts
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/test-fonts
+          key: test-fonts-${{ env.NOTO_CJK_VERSION }}-${{ env.NOTO_EMOJI_VERSION }}
+      - name: Download the fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          set +e
+          sudo apt-get update -q
+          apt-get download fonts-noto-cjk="$NOTO_CJK_VERSION" fonts-noto-cjk-extra="$NOTO_CJK_VERSION"
+          for deb in fonts-noto-cjk*.deb; do dpkg-deb -x "$deb" unpacked; done
+          mkdir -p ~/test-fonts
+          cp unpacked/usr/share/fonts/opentype/noto/NotoSansCJK-{Regular,Bold,Light}.ttc ~/test-fonts/
+          curl -fsSL --retry 3 -o ~/test-fonts/NotoColorEmoji.ttf "https://raw.githubusercontent.com/googlefonts/noto-emoji/$NOTO_EMOJI_VERSION/fonts/NotoColorEmoji.ttf"
+          echo "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b  $HOME/test-fonts/NotoColorEmoji.ttf" | sha256sum -c -
+          exit 0
+      - name: Install the fonts
+        run: |
+          sudo install -Dm644 -t "$DSH_TEST_FONT_DIR" ~/test-fonts/NotoSansCJK-*.ttc
+          sudo install -Dm644 ~/test-fonts/NotoColorEmoji.ttf /usr/share/fonts/noto/NotoColorEmoji.ttf
+      - name: Arm tree, apply comparison diff, run the two Dart files
+        run: |
+          set +e
+          arm='${{ matrix.arm }}'
+          tree="$RUNNER_TEMP/arm-$arm"
+          git worktree add --detach "$tree" HEAD
+          echo "R008: arm=$arm worktree-add exit=$?"
+          echo "R008: arm=$arm head=$(git rev-parse HEAD)"
+          diff_file="$GITHUB_WORKSPACE/.reverse/008/comparison/r3-to-$arm-production.diff"
+          sha256sum "$diff_file" | sed 's/^/R008: diff sha256 /'
+          git -C "$tree" apply --whitespace=error --check "$diff_file"
+          echo "R008: arm=$arm apply-check exit=$?"
+          git -C "$tree" apply --whitespace=error "$diff_file"
+          apply_rc=$?
+          echo "R008: arm=$arm apply exit=$apply_rc"
+          git -C "$tree" status --short | sed 's/^/R008: status /'
+          cd "$tree/app"
+          flutter pub get --enforce-lockfile
+          echo "R008: arm=$arm pub-get exit=$?"
+          flutter test --no-pub --reporter expanded test/diagnostics/diagnostics_bundle_test.dart test/diagnostics/shared_redaction_test.dart --name "crash: the native classification, masked|broad token" > "$RUNNER_TEMP/flutter-$arm.log" 2>&1
+          rc=$?
+          sed 's/^/R008: flutter| /' "$RUNNER_TEMP/flutter-$arm.log" | head -400
+          echo "R008: arm=$arm flutter-test exit=$rc"
+          grep -E 'Expected|Actual|\[E\]|Some tests failed|All tests passed' "$RUNNER_TEMP/flutter-$arm.log" | sed 's/^/R008: flutter-summary| /' | head -60
+          exit $rc
+
+  android-arm:
+    name: Android arm ${{ matrix.arm }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [r1, r2]
+    env:
+      DSH_MAVEN_MIRRORS: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Arm tree, apply comparison diff, run the one Kotlin method
+        run: |
+          set +e
+          arm='${{ matrix.arm }}'
+          tree="$RUNNER_TEMP/arm-$arm"
+          git worktree add --detach "$tree" HEAD
+          echo "R008: arm=$arm worktree-add exit=$?"
+          echo "R008: arm=$arm head=$(git rev-parse HEAD)"
+          diff_file="$GITHUB_WORKSPACE/.reverse/008/comparison/r3-to-$arm-production.diff"
+          sha256sum "$diff_file" | sed 's/^/R008: diff sha256 /'
+          git -C "$tree" apply --whitespace=error --check "$diff_file"
+          echo "R008: arm=$arm apply-check exit=$?"
+          git -C "$tree" apply --whitespace=error "$diff_file"
+          echo "R008: arm=$arm apply exit=$?"
+          git -C "$tree" status --short | sed 's/^/R008: status /'
+          cd "$tree/app"
+          flutter pub get --enforce-lockfile
+          echo "R008: arm=$arm pub-get exit=$?"
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
+          cd android
+          gradle --stacktrace :app:testArm64DebugUnitTest --tests '*LogRedactorTest.sharedDiagnosticsVectorsAndIdempotence' > "$RUNNER_TEMP/gradle-$arm.log" 2>&1
+          rc=$?
+          sed 's/^/R008: gradle| /' "$RUNNER_TEMP/gradle-$arm.log" | tail -n 250
+          echo "R008: arm=$arm gradle-test exit=$rc"
+          grep -nE 'FAILED|expected|Expected|actual|Actual|tests completed|BUILD ' "$RUNNER_TEMP/gradle-$arm.log" | sed 's/^/R008: gradle-summary| /' | head -60
+          exit $rc
