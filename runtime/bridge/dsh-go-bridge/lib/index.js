@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { STATUS_CODES, get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
+import { performance } from "node:perf_hooks";
 import { createPluginConfig, pluginConfigUnavailable } from "./plugin-config.js";
 import { createSessionDeletion, sessionDeletionUnavailable } from "./session-deletion.js";
 import { createCompanionRoutes } from "./companion/routes.js";
@@ -337,7 +338,7 @@ export function apply(ctx, config) {
       },
     }), "dsh-go-bridge: guard canary");
     const probeGuard = async () => {
-      if (guardProbe !== undefined && Date.now() - guardProbe.at < GUARD_PROBE_TTL_MS) return guardProbe.ok;
+      if (guardProbe !== undefined && performance.now() - guardProbe.at < GUARD_PROBE_TTL_MS) return guardProbe.ok;
       const before = canaryHits;
       let status = 0;
       try {
@@ -355,7 +356,7 @@ export function apply(ctx, config) {
         webCtx.logger?.warn?.(error);
       }
       const ok = (status === 401 || status === 403) && canaryHits === before;
-      guardProbe = { at: Date.now(), ok };
+      guardProbe = { at: performance.now(), ok };
       return ok;
     };
 
