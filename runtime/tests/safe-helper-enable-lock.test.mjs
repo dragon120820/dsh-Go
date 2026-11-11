@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 const source = fs.readFileSync(new URL('../../app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/runtime/SafeMode.kt', import.meta.url), 'utf8');
 const script = source.match(/const val PLUGINS_SCRIPT = """([\s\S]*?)"""/)[1];
 
-function run(t, { uninstall = false, names = ['local-plugin'] } = {}) {
+function run(t, { uninstall = false, contended = false, wallShift = 0, names = ['local-plugin'] } = {}) {
   const home = fs.mkdtempSync(join(tmpdir(), 'safe-enable-lock-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(join(home, 'profiles/web'), { recursive: true });
@@ -25,7 +25,9 @@ function run(t, { uninstall = false, names = ['local-plugin'] } = {}) {
     fs.writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, dsh: { bundle: { patch: './cordis.patch.yml' } } }));
     fs.writeFileSync(join(dir, 'cordis.patch.yml'), '[]\n');
   }
-  if (uninstall) fs.writeFileSync(file + '.lock', String(process.pid));
+  if (uninstall || contended) fs.writeFileSync(file + '.lock', String(process.pid));
+  let lockAttempts = 0;
+  let clockReads = 0;
   let completed = false;
   let stderr = '';
   let stdout = '';
@@ -34,6 +36,8 @@ function run(t, { uninstall = false, names = ['local-plugin'] } = {}) {
   // Schedule an existing writer's commit immediately before the helper acquires
   // the real file lock. All manifest reads/writes use the actual filesystem.
   const scheduledFs = { ...fs, writeFileSync(path, ...args) {
+    // The live owner releases after one contention/sleep cycle, well before five seconds.
+    if (contended && path === file + '.lock' && ++lockAttempts === 2) fs.unlinkSync(path);
     if (uninstall && path === file + '.lock' && !completed) {
       assert.ok(fs.existsSync(file + '.lock'));
       delete manifest.dependencies['local-plugin'];
@@ -45,6 +49,9 @@ function run(t, { uninstall = false, names = ['local-plugin'] } = {}) {
   } };
   try {
     runInNewContext(script, {
+      Date: class extends Date {
+        static now() { return Date.now() + (clockReads++ === 0 ? 0 : wallShift); }
+      },
       require: name => {
         if (name === 'fs') return scheduledFs;
         if (name === 'module') return { createRequire: anchor => {
@@ -64,7 +71,17 @@ function run(t, { uninstall = false, names = ['local-plugin'] } = {}) {
         exit: code => { status = code; throw exit; }, kill: process.kill.bind(process) },
     });
   } catch (error) { if (error !== exit) throw error; }
-  return { status, stderr, stdout, completed, manifest: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  return { status, stderr, stdout, completed, lockAttempts, manifest: JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
+
+for (const wallShift of [0, 60000]) {
+  test(`enable waits for a live lock across a ${wallShift}ms wall-clock correction`, t => {
+    const result = run(t, { contended: true, wallShift });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.lockAttempts, 2, 'the owner released the lock after the first failed attempt');
+    assert.match(result.stdout, /已启用/);
+    assert.deepEqual(result.manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'local-plugin']);
+  });
 }
 
 test('enable refuses a plugin removed by the writer that held the manifest lock', t => {

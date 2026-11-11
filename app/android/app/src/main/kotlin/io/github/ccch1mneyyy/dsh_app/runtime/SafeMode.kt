@@ -536,6 +536,7 @@ object SafeMode {
 const fs = require('fs')
 const path = require('path')
 const cp = require('child_process')
+const { performance } = require('perf_hooks')
 
 const HOME = process.env.DSH_APP_ORIGINAL_HOME || process.env.DSH_HOME || '/root/.dsh'
 const SAFE = process.env.DSH_APP_SAFE_DIR || '/var/lib/dsh-app/safe-mode'
@@ -621,7 +622,7 @@ function requireInstalledBundle (name) {
 // taken over when that pid no longer exists; the new content lands by rename.
 function withLock (file, fn) {
   const lock = file + '.lock'
-  const deadline = Date.now() + 5000
+  const deadline = performance.now() + 5000
   for (;;) {
     try {
       fs.writeFileSync(lock, process.pid + '\n', { flag: 'wx', mode: 0o600 })
@@ -633,7 +634,7 @@ function withLock (file, fn) {
         fs.rmSync(lock, { force: true })
         continue
       }
-      if (Date.now() > deadline) die('package.json 正被别的进程修改（锁文件 ' + lock + '），稍后再试')
+      if (performance.now() > deadline) die('package.json 正被别的进程修改（锁文件 ' + lock + '），稍后再试')
       sleep(100)
     }
   }
