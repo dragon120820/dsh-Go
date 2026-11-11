@@ -2,12 +2,14 @@ package io.github.ccch1mneyyy.dsh_app.runtime
 
 import io.github.ccch1mneyyy.dsh_app.phone.Json
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class ManagedSkillInstallerTest {
@@ -92,6 +94,80 @@ class ManagedSkillInstallerTest {
         File(dir(root), "nested/data.txt").apply { parentFile!!.mkdirs(); writeText("\uFEFFvalue") }
         assertEquals("unchanged", ManagedSkillInstaller.install(root, request(root)) { true }.result)
         assertTrue(file.readText().startsWith("\uFEFF"))
+    }
+
+    @Test fun fifoSkillRemainsUserOwnedWithoutReading() {
+        assumeTrue("FIFO regression requires Linux", System.getProperty("os.name").startsWith("Linux"))
+        withRoot { root ->
+            val marker = File(dir(root), "SKILL.md")
+            withFifo(root, marker) { result ->
+                assertEquals("userOwned", result.result)
+                assertNull(result.reason)
+                assertTrue(marker.exists())
+                assertFalse(marker.isFile)
+                assertFalse(File(dir(root), "nested").exists())
+                noTemps(root)
+            }
+        }
+    }
+
+    @Test fun fifoManagedResourceIsReplacedWithoutReading() {
+        assumeTrue("FIFO regression requires Linux", System.getProperty("os.name").startsWith("Linux"))
+        withRoot { root ->
+            assertEquals("installed", ManagedSkillInstaller.install(root, request(root)) { true }.result)
+            val marker = File(dir(root), "SKILL.md")
+            val before = marker.readBytes()
+            val resource = File(dir(root), "nested/data.txt")
+            assertTrue(resource.delete())
+            withFifo(root, resource) { result ->
+                assertEquals("updated", result.result)
+                assertNull(result.reason)
+                assertTrue(resource.isFile)
+                assertEquals("value", resource.readText())
+                assertArrayEquals(before, marker.readBytes())
+                noTemps(root)
+            }
+        }
+    }
+
+    /** Keeps the FIFO without data or EOF; cleanup also covers a reader that starts late. */
+    private fun withFifo(root: File, path: File, verify: (ManagedSkillOutcome) -> Unit) {
+        assertTrue(path.parentFile!!.isDirectory || path.parentFile!!.mkdirs())
+        val worker = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "managed-skill-fifo-test").apply { isDaemon = true }
+        }
+        var keeper: RandomAccessFile? = null
+        try {
+            val mkfifo = ProcessBuilder("mkfifo", path.path).start()
+            try {
+                assertTrue("mkfifo timed out", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                assertEquals(0, mkfifo.exitValue())
+            } finally {
+                if (mkfifo.isAlive) {
+                    mkfifo.destroyForcibly()
+                    assertTrue("mkfifo did not stop", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                }
+            }
+            keeper = RandomAccessFile(path, "rw")
+            val outcome = worker.submit<ManagedSkillOutcome> {
+                ManagedSkillInstaller.install(root, request(root)) { true }
+            }.get(5, TimeUnit.SECONDS)
+            verify(outcome)
+        } finally {
+            try {
+                // Unlink before releasing EOF so a late reader cannot open the FIFO again.
+                assertTrue(!path.exists() || path.delete())
+            } finally {
+                try { keeper?.close() } finally {
+                    worker.shutdown()
+                    try {
+                        assertTrue("managed writer did not stop", worker.awaitTermination(5, TimeUnit.SECONDS))
+                    } finally {
+                        if (!worker.isTerminated) worker.shutdownNow()
+                    }
+                }
+            }
+        }
     }
 
     @Test fun absentDshHomeCreatesNothing() = withRoot { root ->

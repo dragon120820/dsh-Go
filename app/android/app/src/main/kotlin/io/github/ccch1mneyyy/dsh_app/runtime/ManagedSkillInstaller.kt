@@ -212,7 +212,7 @@ internal object ManagedSkillInstaller {
 
     /** Bounded, strict UTF-8, with the same leading-BOM behavior as Dart File.readAsString. */
     private fun readText(file: File, limit: Int): String? = try {
-        file.inputStream().use { stream ->
+        if (!file.isFile) null else file.inputStream().use { stream ->
             val out = ByteArrayOutputStream(minOf(limit, 8192))
             val buffer = ByteArray(8192)
             while (true) {
