@@ -13,7 +13,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,8 +62,33 @@ try {
 
   const files = walk(work).sort();
   const zip = makeZip(files);
-  mkdirSync(dirname(resolve(args.out)), { recursive: true });
-  writeFileSync(args.out, zip);
+  const out = resolve(args.out);
+  mkdirSync(dirname(out), { recursive: true });
+  const existing = lstatSync(out, { throwIfNoEntry: false });
+  // Keep link identity and the existing in-place-write path in read-only directories.
+  let inPlace = existing && (!existing.isFile() || existing.nlink > 1);
+  if (existing && !inPlace) {
+    accessSync(out, constants.W_OK);
+    try {
+      accessSync(dirname(out), constants.W_OK);
+    } catch (error) {
+      if (error.code !== 'EACCES') throw error;
+      inPlace = true;
+    }
+  }
+  if (inPlace) {
+    writeFileSync(out, zip);
+  } else {
+    const pending = mkdtempSync(join(dirname(out), '.companion-pack-'));
+    try {
+      const path = join(pending, 'pack.zip');
+      writeFileSync(path, zip);
+      if (existing) chmodSync(path, existing.mode);
+      renameSync(path, out);
+    } finally {
+      rmSync(pending, { recursive: true, force: true });
+    }
+  }
 
   // Same recipe as runtimeDigest() in companion_pack.dart.
   const digest = createHash('sha256');
