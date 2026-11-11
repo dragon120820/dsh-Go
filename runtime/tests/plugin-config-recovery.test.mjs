@@ -158,3 +158,40 @@ test('a failed rollback baseline read remains host-unavailable without changing 
   assert.deepEqual(after.body.value, before.body.value);
   assert.equal(after.body.revision, before.body.revision);
 });
+
+for (const recovery of ['complete', 'file']) {
+  test(`unreadable ${recovery} recovery cannot confirm the old configuration was restored`, async (t) => {
+    const f = fixture(t, recovery), before = await f.request('subject'), bytes = f.bytes();
+    const original = fs.readFileSync;
+    let verificationReads = 0, injected = 0, result;
+    fs.readFileSync = function (file, options) {
+      // Only the bridge's second Buffer read: change was accepted and the
+      // editor has already attempted rollback. The baseline read stays real.
+      if (file === f.path && options === undefined && ++verificationReads === 2) {
+        injected++;
+        throw Object.assign(new Error('injected recovery verification failure'), { code: 'EIO' });
+      }
+      return original.apply(this, arguments);
+    };
+    syncBuiltinESMExports();
+    try {
+      result = await f.edit('subject', before.body.revision, 'fail', true);
+    } finally {
+      fs.readFileSync = original;
+      syncBuiltinESMExports();
+    }
+    assert.equal(verificationReads, 2);
+    assert.equal(injected, 1);
+    assert.equal(result.status, 500);
+    assert.equal(result.body.error.code, 'recovery-failed');
+    assert.equal(f.bytes().equals(bytes), recovery === 'complete');
+    if (recovery === 'complete') {
+      // Once readable again, a normal GET and new revision permit an ordinary retry.
+      const refreshed = await f.request('subject');
+      assert.deepEqual(refreshed.body.value, before.body.value);
+      const retry = await f.edit('subject', refreshed.body.revision, 'count', 1);
+      assert.equal(retry.status, 200);
+      assert.equal(retry.body.value.count, 1);
+    }
+  });
+}

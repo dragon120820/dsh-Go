@@ -286,7 +286,9 @@ export function createPluginConfig(ctx,{readBody,send}){
    if(FAULTS.has(error))throw error;
    if(String(error?.message).includes('overridden by a home patch or command-line overlay'))throw fault(409,'overridden');
    if(!changed)throw fault(409,'conflict');
-   const restored=fileBytes(editor.documentPath).equals(bytes)&&before.row.entry.fiber?.state===2&&isDeepStrictEqual(before.row.entry.options.config??{},oldRaw);
+   let restoredBytes;
+   try{restoredBytes=fileBytes(editor.documentPath);}catch{throw fault(500,'recovery-failed');}
+   const restored=restoredBytes.equals(bytes)&&before.row.entry.fiber?.state===2&&isDeepStrictEqual(before.row.entry.options.config??{},oldRaw);
    throw fault(restored?409:500,restored?'apply-failed':'recovery-failed');
   }
   return (await snapshot(id)).body;
