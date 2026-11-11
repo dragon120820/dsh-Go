@@ -411,7 +411,7 @@ internal object PetOverlay {
         val poll = d.visibility == Visibility.SHOWN || (machine.phoneTask && machine.enabled && !machine.appForeground)
         val wake = listOfNotNull(
             d.wakeAt?.let { it - t }, if (poll) POLL_MS else null,
-            accessibilityRetry.remaining(PhoneA11yService.instance, t),
+            accessibilityRetry.remaining(PhoneA11yService.instance, SystemClock.elapsedRealtime()),
         ).minOrNull()
         if (wake != null) main.postDelayed(evaluateRunnable, wake.coerceAtLeast(50))
         publishStatus()
@@ -431,7 +431,7 @@ internal object PetOverlay {
 
     private fun overlayHost(): OverlayHost = OverlayAccess.host(
         a11yConnected(), lastAdd,
-        a11yFailed = accessibilityRetry.remaining(PhoneA11yService.instance, now()) != null,
+        a11yFailed = accessibilityRetry.remaining(PhoneA11yService.instance, SystemClock.elapsedRealtime()) != null,
         canDraw = canDraw(),
     )
 
@@ -441,7 +441,7 @@ internal object PetOverlay {
         val cd = canDraw()
         val changed = lastCanDraw != null && lastCanDraw != cd
         lastCanDraw = cd
-        if (lastAdd == AddResult.FAILED && OverlayAccess.retry(lastAdd, failedAt, now(), cd, changed)) lastAdd = null
+        if (lastAdd == AddResult.FAILED && OverlayAccess.retry(lastAdd, failedAt, SystemClock.elapsedRealtime(), cd, changed)) lastAdd = null
     }
 
     /** Adds a 1×1 invisible application overlay and removes it again; the result is the permission. */
@@ -460,7 +460,7 @@ internal object PetOverlay {
             AddResult.OK
         } catch (e: Exception) {
             Log.i(TAG, "overlay permission probe failed: ${e.javaClass.simpleName}")
-            failedAt = now()
+            failedAt = SystemClock.elapsedRealtime()
             AddResult.FAILED
         }
     }
@@ -727,9 +727,9 @@ internal object PetOverlay {
             removeWindows()
             if (want == OverlayHost.APPLICATION) {
                 lastAdd = AddResult.FAILED
-                failedAt = now()
+                failedAt = SystemClock.elapsedRealtime()
             } else if (service != null) {
-                accessibilityRetry.failed(service, now())
+                accessibilityRetry.failed(service, SystemClock.elapsedRealtime())
                 service.invalidateOverlayWindowContext()
             }
             host = OverlayHost.NONE
