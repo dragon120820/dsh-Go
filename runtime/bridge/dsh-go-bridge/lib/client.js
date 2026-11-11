@@ -260,7 +260,7 @@ window.__ModuleLoader__.load({
 			 */
 			let disposed = false;
 			const openTab = async (target, options = {}) => {
-				const deadline = Date.now() + (finite(options.timeoutMs) || 15000);
+				const deadline = performance.now() + (finite(options.timeoutMs) || 15000);
 				const find = () => {
 					const types = rightTabTypes();
 					return types.find((d) => d.id === target) || types.find((d) => d.kind === target)
@@ -269,7 +269,7 @@ window.__ModuleLoader__.load({
 				let type;
 				let opened = false;
 				let lastError = "no-sidebar";
-				while (!disposed && Date.now() <= deadline) {
+				while (!disposed && performance.now() <= deadline) {
 					const sidebar = ctx.get("sidebarRight");
 					type = type || find();
 					if (sidebar && type) {
