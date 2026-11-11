@@ -78,7 +78,7 @@ run -- "${GUEST[@]:0:${#GUEST[@]}-3}" /bin/sh -c 'node --version; npm --version;
 if [[ "$NETWORK" == 1 ]]; then
 echo "== python / pip / venv / git / certificates / dpkg consistency (network)"
 run --share-net -- "${GUEST[@]:0:${#GUEST[@]}-3}" /bin/bash -c '
-  set -e
+  set -eo pipefail
   python3 --version; pip --version | cut -d" " -f1-2; git --version
   printf "print(sum(range(10)))\n" > /tmp/hello.py && python3 /tmp/hello.py
   python3 -c "import ssl, urllib.request; print(\"https via python:\", urllib.request.urlopen(\"https://pypi.org/simple/pip/\", timeout=20).status)"
