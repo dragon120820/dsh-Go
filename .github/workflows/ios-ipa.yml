@@ -7,6 +7,9 @@
 #
 # The .ipa lands both as a 14-day artifact and as an asset on a `ios-unsigned-*`
 # release, so a sideloading tool can fetch it without a GitHub session.
+#
+# macos-26 capacity is tight: a run can sit queued and then be cancelled before it
+# starts. Re-pushing this file is the retry.
 name: iOS IPA (unsigned)
 
 on:
