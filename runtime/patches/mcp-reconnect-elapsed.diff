@@ -1,0 +1,28 @@
+--- a/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js
+@@ -6,6 +6,7 @@
+ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+ import { scrubbedParentEnv } from "@deepseek-ai/dsh-subprocess";
+ import { createHash } from "node:crypto";
++import { performance } from "node:perf_hooks";
+ import { isDeepStrictEqual } from "node:util";
+ import { isImageAdmissionError } from "@deepseek-ai/dsh-attachment";
+ import { assertSupportedJsonSchema } from "@deepseek-ai/dsh-tools";
+@@ -633,7 +634,7 @@
+ 			ctx.logger.error(`${label}: ${message}`);
+ 			return;
+ 		}
+-		if (connectedAt !== void 0 && Date.now() - connectedAt >= policy.maxDelayMs) failedAttempts = 0;
++		if (connectedAt !== void 0 && performance.now() - connectedAt >= policy.maxDelayMs) failedAttempts = 0;
+ 		connectedAt = void 0;
+ 		failedAttempts += 1;
+ 		if (failedAttempts > policy.maxAttempts) {
+@@ -742,7 +743,7 @@
+ 		}
+ 		if (!isCurrent(generation)) return;
+ 		serverInstructions = instructions;
+-		connectedAt = Date.now();
++		connectedAt = performance.now();
+ 		if (failedAttempts > 0) ctx.logger.info(`${label}: reconnected and re-synced tools (attempt ${failedAttempts}/${policy.maxAttempts})`);
+ 		deliverPhoneEnds();
+ 	}
