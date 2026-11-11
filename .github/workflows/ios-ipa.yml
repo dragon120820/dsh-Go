@@ -1,0 +1,97 @@
+# Builds an unsigned .ipa from the iOS branch of the upstream repository, on a
+# macOS runner. Nothing here needs secrets; signing happens later with a personal
+# Apple ID (AltStore / Sideloadly / Xcode).
+#
+# The workflow lives on this fork's `main` so that `workflow_dispatch` can find it;
+# the code it compiles is checked out from ccch1mneyyy/dsh-Go.
+name: iOS IPA (unsigned)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Upstream branch to build'
+        type: string
+        default: feat/ios-foundation
+      engine:
+        description: 'Prepare the on-device engine (downloads NodeMobile and the runtime; much slower)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      FLUTTER_VERSION: 3.47.7
+      FLUTTER_SHA256: dd9da574c3168460550117eb0e8dd0313ae934fabf64a82a6d557fff5fd1422e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ccch1mneyyy/dsh-Go
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphone || true
+          if [ -d /Applications/Xcode_26.6.app ]; then
+            echo "DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer" >> "$GITHUB_ENV"
+            xcodebuild -version
+          fi
+
+      - name: Install Flutter
+        run: |
+          archive="flutter_macos_arm64_${FLUTTER_VERSION}-stable.zip"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/$archive"
+          echo "$FLUTTER_SHA256  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/$archive" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare the on-device engine
+        if: ${{ inputs.engine }}
+        run: |
+          python3 --version
+          bash tooling/ios/prepare-engine.sh
+          ls -la app/ios/Engine
+
+      - name: Resolve dependencies
+        run: |
+          flutter --version
+          python3 app/tool/l10n_merge.py --no-gen
+          cd app
+          flutter pub get --enforce-lockfile
+          flutter gen-l10n
+
+      - name: Build for a device, unsigned
+        working-directory: app
+        run: bash ../tooling/ios/build.sh --release --no-codesign
+
+      - name: Pack the .ipa
+        run: |
+          app="app/build/ios/iphoneos/Runner.app"
+          test -d "$app"
+          du -sh "$app"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && /usr/bin/ditto -c -k --keepParent Payload "$RUNNER_TEMP/DSH-Go-unsigned.ipa")
+          ls -lh "$RUNNER_TEMP/DSH-Go-unsigned.ipa"
+          echo "::notice title=ipa::$(du -h "$RUNNER_TEMP/DSH-Go-unsigned.ipa" | cut -f1) from ${{ inputs.ref }}"
+
+      - name: Keep the unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-Go-unsigned-ipa
+          path: ${{ runner.temp }}/DSH-Go-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
