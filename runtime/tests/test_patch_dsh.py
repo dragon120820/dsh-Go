@@ -294,6 +294,49 @@ class PatchDsh(unittest.TestCase):
         with open(target, "rb") as source:
             self.assertEqual(source.read(), original + b"// upstream drift\n")
 
+    def three_stage_chain_fixture(self, broken=False):
+        first, second = self.chain_fixture(broken=broken)
+        final = second.replace("later reviewed patch\n", "final reviewed patch\n", 1)
+        name = "zzz-final.diff"
+        with open(os.path.join(self.patches, name), "w") as out:
+            out.write("--- a/%s\n+++ b/%s\n@@ -1,1 +1,1 @@\n-later reviewed patch\n+final reviewed patch\n" % (REL, REL))
+        pins_path = os.path.join(self.patches, "pins.json")
+        pins = load(pins_path)
+        pins["patches"][name] = {"1.0.0": {REL: {"before": sha(second), "after": sha(final)}}}
+        with open(pins_path, "w") as out:
+            json.dump(pins, out)
+        # Also keep the fixture usable with the explicit-series follow-up.
+        with open(os.path.join(self.patches, "series"), "w") as out:
+            out.write("guard.diff\nzz-later.diff\nzzz-final.diff\n")
+        return first, second, final
+
+    def test_three_stage_chain_resumes_from_every_known_state(self):
+        first, second, final = self.three_stage_chain_fixture()
+        for stage, starting in enumerate((ORIGINAL, first, second, final)):
+            with self.subTest(stage=stage):
+                with open(self.target, "w") as out:
+                    out.write(starting)
+                result = self.run_cli("--dsh-version", "1.0.0")
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(read(self.target), final)
+
+    def test_three_stage_chain_rejects_unknown_intermediate_bytes(self):
+        _, second, _ = self.three_stage_chain_fixture()
+        unknown = second + "unexpected modification\n"
+        with open(self.target, "w") as out:
+            out.write(unknown)
+        result = self.run_cli("--dsh-version", "1.0.0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("differs from the vetted", result.stdout)
+        self.assertEqual(read(self.target), unknown)
+
+    def test_three_stage_broken_chain_fails_before_writing(self):
+        self.three_stage_chain_fixture(broken=True)
+        result = self.run_cli("--dsh-version", "1.0.0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("broken patch hash chain", result.stdout)
+        self.assertEqual(read(self.target), ORIGINAL)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
