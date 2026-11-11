@@ -188,3 +188,25 @@ test('the PRoot DNS import never stops Node, whether or not its resolver starts'
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'main\n');
 });
+
+for (const [api, family, address, changed] of [
+  ['callback', 4, '127.0.0.1', '192.0.2.7'],
+  ['promise', 6, '::1', '2001:db8::7'],
+]) {
+  test(`${api} hosts results belong to each call, not the cached config`, async (t) => {
+    const udp = await server(t); const adapter = fixture(t, udp.endpoint);
+    const callback = promisify(adapter.lookup);
+    const lookup = api === 'callback' ? callback : adapter.promiseLookup;
+    const other = api === 'callback' ? adapter.promiseLookup : callback;
+    const options = { family, all: true };
+    const expected = [{ address, family }];
+    const first = await lookup('fixture.local', options);
+    assert.deepEqual(first, expected);
+    first[0].address = changed;
+    const second = await lookup('fixture.local', options);
+    assert.deepEqual(second, expected);
+    assert.notStrictEqual(first[0], second[0]);
+    assert.deepEqual(await other('fixture.local', family), expected[0]);
+    assert.equal(udp.queries.length, 0, 'hosts results do not query the DNS server');
+  });
+}
