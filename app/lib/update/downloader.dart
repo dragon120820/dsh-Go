@@ -78,7 +78,7 @@ class CancelToken {
   }
 }
 
-enum _Step { complete, cancelled, interrupted, unreachable, rejected, storage }
+enum _Step { complete, cancelled, interrupted, oversized, unreachable, rejected, storage }
 
 /// Downloads one file into [directory], resuming `<name>.part` with HTTP
 /// ranges, falling through the URLs in order, and only hands it over once
@@ -319,6 +319,11 @@ class ApkDownloader {
         .timeout(idleTimeout)
         .listen(
           (chunk) {
+            if (done.isCompleted) return;
+            if (total != null && chunk.length > total - received) {
+              done.complete(_Step.oversized);
+              return;
+            }
             sink.add(chunk);
             received += chunk.length;
             if (received - reported >= progressStep) {
@@ -342,9 +347,9 @@ class ApkDownloader {
       }),
     );
     var step = await done.future;
-    if (step == _Step.storage) {
-      // A cancelled response may still be awaiting its producer. Do not wait
-      // for it before reporting the storage failure, or leave its error loose.
+    if (step == _Step.storage || step == _Step.oversized) {
+      // Stop an unfinished response without waiting for its producer cleanup
+      // before reporting this failed attempt, or leaving its error loose.
       unawaited(sub.cancel().catchError((Object _) {}));
     }
     try {
@@ -354,13 +359,13 @@ class ApkDownloader {
     } on FileSystemException {
       return _Step.storage;
     }
+    if (step == _Step.oversized) {
+      await _deleteQuietly(part);
+      return _Step.interrupted;
+    }
     if (step == _Step.complete) {
       onProgress?.call(DownloadProgress(received: received, total: total, source: url.label));
       if (total != null && received < total) step = _Step.interrupted;
-      if (total != null && received > total) {
-        await _deleteQuietly(part);
-        step = _Step.interrupted;
-      }
     }
     return step;
   }
