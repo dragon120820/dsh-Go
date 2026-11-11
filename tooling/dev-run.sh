@@ -76,7 +76,7 @@ fi
 command -v adb >/dev/null || die "adb not found"
 
 # --- the device
-devices() { adb devices | awk 'NR > 1 && $2 == "device" { print $1 }'; }
+devices() { adb devices | tr -d '\r' | awk 'NR > 1 && $2 == "device" { print $1 }'; }
 if [[ -z $serial ]]; then
   found=$(devices)
   [[ -n $found ]] || die "no device: connect the phone, or pair it with adb pair"
