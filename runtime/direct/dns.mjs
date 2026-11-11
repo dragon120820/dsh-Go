@@ -81,6 +81,14 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
     watcher.on('error', (error) => { configurationError = error; });
   }
 
+  function snapshotOptions(options) {
+    const { family, hints, all, order, verbatim } = typeof options === 'number' ? { family: options } : (options ?? {});
+    return {
+      family, hints, all,
+      order: order ?? (verbatim === undefined ? dns.getDefaultResultOrder() : verbatim ? 'verbatim' : 'ipv4first'),
+    };
+  }
+
   async function resolve(hostname, options) {
     if (configurationError) throw lookupError(hostname, [{ code: 'ESERVFAIL' }]);
     const snapshot = current;
@@ -119,8 +127,7 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
         address: `::ffff:${entry.address}`, family: 6,
       })) : [])];
     }
-    const order = options.order ?? (options.verbatim === undefined ? dns.getDefaultResultOrder()
-      : options.verbatim ? 'verbatim' : 'ipv4first');
+    const order = options.order;
     if (order !== 'verbatim') answers.sort((a, b) => order === 'ipv6first' ? b.family - a.family : a.family - b.family);
     if (!answers.length) throw lookupError(hostname, failures);
     return answers;
@@ -134,7 +141,7 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
     if (!hostname || typeof hostname !== 'string' || hostname.includes('\0') || isIP(hostname)) {
       return nativeLookup(hostname, options, callback);
     }
-    const parsed = typeof options === 'number' ? { family: options } : (options ?? {});
+    const parsed = snapshotOptions(options);
     resolve(hostname, parsed).then(
       (answers) => parsed.all ? process.nextTick(callback, null, answers)
         : process.nextTick(callback, null, answers[0].address, answers[0].family),
@@ -150,8 +157,10 @@ export function createLookup({ resolvConf, hostsFile, Resolver = dns.Resolver, w
   }
   async function promiseLookup(hostname, options) {
     // Node 24's Promise API validates family more strictly than callback lookup.
-    await nativePromiseLookup('127.0.0.1', options);
-    return callbackPromise(hostname, options);
+    const validation = nativePromiseLookup('127.0.0.1', options);
+    const parsed = snapshotOptions(options);
+    await validation;
+    return callbackPromise(hostname, parsed);
   }
   lookup[promisify.custom] = callbackPromise;
   return { lookup, promiseLookup, refresh, close: () => watcher?.close() };

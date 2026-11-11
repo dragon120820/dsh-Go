@@ -46,12 +46,12 @@ async function server(t, ipv6 = false, lastOctet = 7, beforeReply = () => {}) {
   return { endpoint: ipv6 ? `[::1]:${socket.address().port}` : `127.0.0.1:${socket.address().port}`, queries };
 }
 
-function fixture(t, endpoint, watch = false) {
+function fixture(t, endpoint, watch = false, Resolver) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'direct-dns-'));
   const resolvConf = path.join(dir, 'resolv.conf'); const hostsFile = path.join(dir, 'hosts');
   fs.writeFileSync(resolvConf, `nameserver ${endpoint}\noptions timeout:2 attempts:2\n`);
   fs.writeFileSync(hostsFile, '127.0.0.1 localhost fixture.local\n::1 localhost fixture.local\n');
-  const adapter = createLookup({ resolvConf, hostsFile, watch });
+  const adapter = createLookup({ resolvConf, hostsFile, watch, Resolver });
   t.after(() => { adapter.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { ...adapter, resolvConf };
 }
@@ -210,3 +210,83 @@ for (const [api, family, address, changed] of [
     assert.equal(udp.queries.length, 0, 'hosts results do not query the DNS server');
   });
 }
+
+test('callback lookup captures inherited all before the caller reuses its options', async (t) => {
+  const udp = await server(t); const adapter = fixture(t, udp.endpoint);
+  const inherited = { family: 4, all: false };
+  const options = Object.create(inherited);
+  const pending = new Promise((resolve, reject) => adapter.lookup('fixture.local', options, (error, address, family) => {
+    if (error) reject(error);
+    else resolve({ address, family });
+  }));
+  inherited.all = true;
+  assert.deepEqual(await pending, { address: '127.0.0.1', family: 4 });
+  assert.equal(udp.queries.length, 0);
+});
+
+test('Promise lookup captures inherited family hints and all before its first await', async (t) => {
+  const udp = await server(t); const adapter = fixture(t, udp.endpoint);
+  const inherited = { family: 6, hints: dns.V4MAPPED | dns.ALL, all: true };
+  const pending = adapter.promiseLookup('fixture.local', Object.create(inherited));
+  Object.assign(inherited, { family: 4, hints: 0, all: false });
+  assert.deepEqual(await pending, [
+    { address: '::1', family: 6 }, { address: '::ffff:127.0.0.1', family: 6 },
+  ]);
+  assert.equal(udp.queries.length, 0);
+});
+
+for (const changed of ['order', 'verbatim', 'default']) {
+  test(`an in-flight lookup keeps its ${changed} ordering decision`, async (t) => {
+    const queued = []; const queries = [];
+    class Resolver {
+      setServers() {}
+      resolve4(name, callback) {
+        queries.push([name, 4]); queued.push(() => callback(null, ['192.0.2.7']));
+      }
+      resolve6(name, callback) {
+        queries.push([name, 6]); queued.push(() => callback(null, ['2001:db8::7']));
+      }
+    }
+    const adapter = fixture(t, '127.0.0.1', false, Resolver);
+    const previous = dns.getDefaultResultOrder();
+    try {
+      dns.setDefaultResultOrder(changed === 'verbatim' ? 'ipv6first' : 'ipv4first');
+      const options = { all: true, ...(changed === 'order' ? { order: 'ipv4first' } : {}) };
+      const pending = promisify(adapter.lookup)('queued.test', options);
+      assert.deepEqual(queries, [['queued.test', 4], ['queued.test', 6]]);
+      if (changed === 'default') dns.setDefaultResultOrder('ipv6first');
+      else if (changed === 'order') options.order = 'ipv6first';
+      else options.verbatim = false;
+      queued.splice(0).forEach((release) => release());
+      assert.deepEqual((await pending).map((entry) => entry.family), changed === 'verbatim' ? [6, 4] : [4, 6]);
+    } finally {
+      dns.setDefaultResultOrder(previous);
+      queued.splice(0).forEach((release) => release());
+    }
+  });
+}
+
+test('native invalid-family errors precede snapshot reads in both APIs', async (t) => {
+  const udp = await server(t); const adapter = fixture(t, udp.endpoint);
+  let reads = 0;
+  const options = { family: 9, get all() { reads++; throw new Error('all read after invalid family'); } };
+  assert.throws(() => adapter.lookup('fixture.local', options, () => {}), { code: 'ERR_INVALID_ARG_VALUE' });
+  await assert.rejects(adapter.promiseLookup('fixture.local', options), { code: 'ERR_INVALID_ARG_VALUE' });
+  assert.equal(reads, 0);
+  assert.equal(udp.queries.length, 0);
+});
+
+test('capturing options preserves the existing null-verbatim ordering policy', async (t) => {
+  const udp = await server(t); const adapter = fixture(t, udp.endpoint);
+  const previous = dns.getDefaultResultOrder();
+  try {
+    dns.setDefaultResultOrder('ipv6first');
+    for (const lookup of [promisify(adapter.lookup), adapter.promiseLookup]) {
+      const answers = await lookup('fixture.local', { all: true, verbatim: null });
+      assert.deepEqual(answers.map((entry) => entry.family), [4, 6]);
+    }
+    assert.equal(udp.queries.length, 0);
+  } finally {
+    dns.setDefaultResultOrder(previous);
+  }
+});
