@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { once } from 'node:events';
+import { performance } from 'node:perf_hooks';
 import { apply } from '../bridge/dsh-go-bridge/lib/index.js';
 import { encodeFrame } from '../bridge/dsh-go-bridge/lib/native/ws.js';
 import { parseManifest } from '../bridge/dsh-go-bridge/lib/native/manifest.js';
@@ -287,8 +288,8 @@ for (const [order, state] of ['voice-first', 'audio-first'].flatMap(order => ['a
 }
 
 async function until(predicate, message, timeout = 1500) {
-  const end = Date.now() + timeout;
-  while (!predicate()) { if (Date.now() > end) throw new Error(message); await delay(10); }
+  const end = performance.now() + timeout;
+  while (!predicate()) { if (performance.now() > end) throw new Error(message); await delay(10); }
 }
 async function unfinishedMedia(t, f, effect, producerReady) {
   f.holdNextMediaResponse();
