@@ -4,6 +4,7 @@ import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
 
 /** Enabled bundles, installed packages and settings layer of the main profile at one moment. */
 data class ProfileSnapshot(
@@ -192,7 +193,7 @@ object LastKnownGood {
                 val patchFile = File(dir, "cordis.patch.yml")
                 if (patchFile.isFile) patchFile.copyTo(File(dir, "cordis.patch.yml.bak-$stamp"), overwrite = true)
                 val text = lkg.patch
-                if (text != null) SafeMode.writeAtomic(patchFile, text) else patchFile.delete()
+                if (text != null) SafeMode.writeAtomic(patchFile, text) else Files.deleteIfExists(patchFile.toPath())
             }
             plan
         }
