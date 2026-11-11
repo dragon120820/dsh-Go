@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import { createLookup, readDnsConfig } from '../../direct/dns.mjs';
 
 async function server(t, ipv6 = false, lastOctet = 7, beforeReply = () => {}) {
@@ -65,10 +66,10 @@ test('config keeps explicit servers, IPv6 and hosts aliases; empty config fails 
 
 test('a nonresponding configured server gives a bounded retryable failure without NSS fallback', async (t) => {
   const udp = await server(t); const adapter = fixture(t, udp.endpoint);
-  const start = Date.now();
+  const start = performance.now();
   await assert.rejects(adapter.promiseLookup('timeout.test', 4), { code: 'EAI_AGAIN' });
   assert(udp.queries.length >= 2, `c-ares retry count: ${udp.queries.length}`);
-  assert(Date.now() - start < 15_000, 'resolver budget remains bounded');
+  assert(performance.now() - start < 15_000, 'resolver budget remains bounded');
 });
 
 test('real c-ares A/AAAA, all/order, IP literal, hosts and IDNA', async (t) => {
@@ -162,8 +163,8 @@ test('the live directory watcher observes atomic replacement and recovers after 
   const adapter = fixture(t, first.endpoint, true);
   assert.equal((await adapter.promiseLookup('dual.test', 4)).address, '192.0.2.7');
   async function eventually(check) {
-    const deadline = Date.now() + 2000;
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + 2000;
+    while (performance.now() < deadline) {
       try { if (await check()) return; } catch { /* wait for the filesystem event */ }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
