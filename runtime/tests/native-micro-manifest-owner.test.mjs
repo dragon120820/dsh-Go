@@ -5,6 +5,7 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import {pathToFileURL} from 'node:url';
 import {NativeCore} from '../bridge/dsh-go-bridge/lib/native/core.js';
 import {effectiveLimits} from '../bridge/dsh-go-bridge/lib/native/limits.js';
@@ -15,8 +16,11 @@ const PKG='micro-manifest-test';
 async function fixture(t){
  const prefix=resolve(prefixArg);
  const {boot}=await import(pathToFileURL(join(prefix,'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js')));
- t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
- t.after(()=>t.mock.timers.reset());
+ const clockOrigin=Date.now();
+ t.mock.timers.enable({apis:['Date','setTimeout'],now:clockOrigin});
+ // scan() uses elapsed time; tick the same clock as the production debounce.
+ const elapsed=t.mock.method(performance,'now',()=>Date.now()-clockOrigin);
+ t.after(()=>{elapsed.mock.restore();t.mock.timers.reset()});
  const dir=await mkdtemp(join(tmpdir(),'micro-manifest-owner-'));
  let ctx,core,routes,server,ws;
  const probe={starts:0,cleanups:0,emitters:[]};
