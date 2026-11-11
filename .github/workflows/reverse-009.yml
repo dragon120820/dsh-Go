@@ -155,8 +155,8 @@ jobs:
           R "dart test inventory" "cd packages/dsh_client && dart test --reporter expanded test/client_inventory_api_test.dart"
           S dart-test-lines '^[0-9:]+ \+[0-9]+'
           # Diff of what the formatter would do to dsh_go_api.dart, for the receipt (the tree is not modified).
-          cp packages/dsh_client/lib/src/dsh_go_api.dart "$RUNNER_TEMP/dsh_go_api.dart"
-          ( cd "$RUNNER_TEMP" && dart format --line-length=120 dsh_go_api.dart >/dev/null 2>&1; diff -u "$GITHUB_WORKSPACE/packages/dsh_client/lib/src/dsh_go_api.dart" dsh_go_api.dart | sed 's/^/R009: format-diff| /' | head -80 )
+          dart format --line-length=120 packages/dsh_client/lib/src/dsh_go_api.dart > /dev/null 2>&1
+          git diff -- packages/dsh_client/lib/src/dsh_go_api.dart | sed 's/^/R009: format-diff| /' | head -80
           if [ -s "$RUNNER_TEMP/r9-fails.txt" ]; then echo "R009: job=dart FAILED COMMANDS:"; sed 's/^/R009: /' "$RUNNER_TEMP/r9-fails.txt"; exit 1; fi
           echo "R009: job=dart all commands exit 0"
 
@@ -302,7 +302,8 @@ jobs:
           R "pub get" "cd app && flutter pub get --enforce-lockfile && printf 'sdk.dir=%s\nflutter.sdk=%s\n' \"\$ANDROID_HOME\" \"\$FLUTTER_ROOT\" > android/local.properties"
           R "gradle testArm64DebugUnitTest" "cd app/android && gradle --stacktrace :app:testArm64DebugUnitTest --rerun --tests '*FailureLogsTest' --tests '*RuntimeLogsTest' --tests '*CrashClassifierTest' --tests '*PrivateKeyCrashEvidenceTest' --tests '*SafePolicyTest' --tests '*StartupFailureStateTest' --tests 'io.github.ccch1mneyyy.dsh_app.phone.PhoneTaskSessionsTest.offOnAndEngineRestartCannotAdmitANewDriverAheadOfOldOffCleanup' --tests 'io.github.ccch1mneyyy.dsh_app.runtime.LogRedactorTest.sharedDiagnosticsVectorsAndIdempotence'"
           S gradle-summary '(FAILED|tests completed|BUILD |Expected|expected|Actual|actual|ComparisonFailure|AssertionError)'
-          python3 .reverse/009/junit.py 'app/android/app/build/test-results/testArm64DebugUnitTest/TEST-*.xml'
+          find "$GITHUB_WORKSPACE" -name 'TEST-*.xml' -path '*testArm64DebugUnitTest*' | sed 's/^/R009: junit-found| /'
+          python3 .reverse/009/junit.py $(find "$GITHUB_WORKSPACE" -name 'TEST-*.xml' -path '*testArm64DebugUnitTest*' | sort)
           echo "R009: junit python exit=$?"
           if [ -s "$RUNNER_TEMP/r9-fails.txt" ]; then echo "R009: job=kotlin FAILED COMMANDS:"; sed 's/^/R009: /' "$RUNNER_TEMP/r9-fails.txt"; exit 1; fi
           echo "R009: job=kotlin all commands exit 0"

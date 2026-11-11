@@ -2,7 +2,7 @@ import glob
 import sys
 import xml.etree.ElementTree as ET
 
-files = sorted(glob.glob(sys.argv[1]))
+files = sorted(sys.argv[1:])
 print("R009: junit files=%d" % len(files))
 for f in files:
     root = ET.parse(f).getroot()
