@@ -1,0 +1,114 @@
+# Temporary, never merged. Runs the commands named in requestfromweb-010 on the 009 head plus six small patches.
+name: reverse-010
+
+on:
+  push:
+    branches: [reverse/refactor2-010]
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  NODE_VERSION: 24.22.1
+  GRADLE_VERSION: 9.3.1
+  TZ: Asia/Shanghai
+  START_SHA: 55540d13cc04a7171ba6abd4c5999c2f023c85bf
+
+jobs:
+  runtime:
+    name: R010 runtime (sections 1, 2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      UV_USE_IO_URING: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Environment and prepared prefixes
+        run: bash .reverse/010/runtime-prep.sh
+      - name: Section 1, four runtime test files
+        run: bash .reverse/010/runtime-s1.sh
+      - name: Section 2, media
+        run: bash .reverse/010/runtime-s2.sh
+      - name: Verdict
+        if: always()
+        run: |
+          if [ -s "$RUNNER_TEMP/r10-fails.txt" ]; then echo "R010: job=runtime FAILED COMMANDS:"; sed 's/^/R010: /' "$RUNNER_TEMP/r10-fails.txt"; exit 1; fi
+          echo "R010: job=runtime all commands exit 0"
+
+  dart:
+    name: R010 dart (section 3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PUB_HOSTED_URL: https://pub.flutter-io.cn # The registry the lockfiles were resolved from.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Section 3
+        run: bash .reverse/010/dart.sh
+
+  flutter:
+    name: R010 flutter (section 4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Trees and drafts
+        run: bash .reverse/010/flutter-setup.sh
+      - name: Format and analyze
+        run: bash .reverse/010/flutter-fa.sh
+      - name: Tests
+        run: bash .reverse/010/flutter-tests.sh
+      - name: Verdict
+        if: always()
+        run: |
+          if [ -s "$RUNNER_TEMP/r10-fails.txt" ]; then echo "R010: job=flutter FAILED COMMANDS:"; sed 's/^/R010: /' "$RUNNER_TEMP/r10-fails.txt"; exit 1; fi
+          echo "R010: job=flutter all commands exit 0"
+
+  kotlin:
+    name: R010 kotlin (section 5)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DSH_MAVEN_MIRRORS: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Section 5
+        run: bash .reverse/010/kotlin.sh
