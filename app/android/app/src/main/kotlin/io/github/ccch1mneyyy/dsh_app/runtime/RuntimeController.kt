@@ -701,16 +701,15 @@ class RuntimeController private constructor(private val app: Context) : DshProce
 
     /** Output around the failure on the card, else around the main profile's last failure (tokens masked). */
     fun failureLog(): List<String> {
-        val name = when {
-            failure != null -> LATEST_FAILURE_LOG
-            mainFailure != null -> MAIN_FAILURE_LOG
-            else -> return emptyList()
+        // onExit publishes the failure and its metadata under this monitor. Read the file outside it.
+        val (main, metadata) = synchronized(this) {
+            when {
+                failure != null -> false to prefs.getString(K_FAILURE, null)
+                mainFailure != null -> true to prefs.getString(K_MAIN_FAILURE, null)
+                else -> return emptyList()
+            }
         }
-        return try {
-            File(logDir, name).readLines()
-        } catch (_: Exception) {
-            emptyList()
-        }
+        return FailureLogs.read(logDir, main, metadata)
     }
 
     /** What [restoreLastKnownGood] would change: `{available, at, disable, enable, changed, patchChanged, empty}`. */
@@ -806,20 +805,17 @@ class RuntimeController private constructor(private val app: Context) : DshProce
 
     private fun briefing(): SafeMode.Briefing {
         val lkg = LastKnownGood.load(lkgFile)
-        val log = try {
-            File(logDir, MAIN_FAILURE_LOG).readLines()
-        } catch (_: Exception) {
-            emptyList()
+        val (savedFailure, metadata) = synchronized(this) {
+            mainFailure to prefs.getString(K_MAIN_FAILURE, null)
         }
-        val mainFailure = mainFailure
         return SafeMode.Briefing(
-            failure = mainFailure,
+            failure = savedFailure,
             reason = safeReason,
             moved = movedAside(),
             lkgAt = lkg?.at,
             lkgBundles = lkg?.snapshot?.bundles ?: emptyList(),
             lkgVersions = lkg?.snapshot?.versions ?: emptyMap(),
-            failureLog = if (mainFailure == null) emptyList() else log,
+            failureLog = if (savedFailure == null) emptyList() else FailureLogs.read(logDir, true, metadata),
         )
     }
 
@@ -870,23 +866,17 @@ class RuntimeController private constructor(private val app: Context) : DshProce
     }
 
     private fun recordFailure(f: RunFailure, tail: List<String>) {
+        val record = FailureLogs.prepare(f, tail)
         failure = f
-        val json = JSONObject(f.toMap()).toString()
-        val edit = prefs.edit().putString(K_FAILURE, json)
+        val edit = prefs.edit().putString(K_FAILURE, record.metadata)
         // A later kill from outside says nothing about the profile: keep the plugin failure it followed.
         val main = !f.safeMode && (f.kind != FailureKind.KILLED || mainFailure == null)
         if (main) {
             mainFailure = f
-            edit.putString(K_MAIN_FAILURE, json)
+            edit.putString(K_MAIN_FAILURE, record.metadata)
         }
         edit.apply()
-        try {
-            logDir.mkdirs()
-            val text = tail.joinToString("\n", postfix = "\n") { LogRedactor.redact(it) }
-            File(logDir, LATEST_FAILURE_LOG).writeText(text)
-            if (main) File(logDir, MAIN_FAILURE_LOG).writeText(text)
-        } catch (_: Exception) {
-        }
+        FailureLogs.write(logDir, record, main)
     }
 
     private fun readFailure(key: String): RunFailure? = try {
@@ -1117,8 +1107,6 @@ class RuntimeController private constructor(private val app: Context) : DshProce
         private const val K_DIRECT_ENGINE = "directEngine"
         /** Runtime version Direct failed to launch with (see [SafePolicy.directLaunchFailed]). */
         private const val K_DIRECT_FAILED = "directEngineFailedRuntime"
-        private const val MAIN_FAILURE_LOG = "failure-normal.log"
-        private const val LATEST_FAILURE_LOG = "failure-latest.log"
 
         @Volatile private var instance: RuntimeController? = null
 
