@@ -73,7 +73,7 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAILED=1; }
 FAILED=0
 
 echo "== versions"
-run -- "${GUEST[@]:0:${#GUEST[@]}-3}" /bin/sh -c 'node --version; npm --version; dsh --version 2>&1 | head -3; cat /etc/os-release | head -2' || fail versions
+run -- "${GUEST[@]:0:${#GUEST[@]}-3}" /bin/bash -c 'set -eo pipefail; node --version; npm --version; dsh --version 2>&1 | sed -n "1,3p"; head -2 /etc/os-release' || fail versions
 
 if [[ "$NETWORK" == 1 ]]; then
 echo "== python / pip / venv / git / certificates / dpkg consistency (network)"
