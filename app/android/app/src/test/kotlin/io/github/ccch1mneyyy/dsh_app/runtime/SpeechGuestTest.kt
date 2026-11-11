@@ -1,10 +1,15 @@
 package io.github.ccch1mneyyy.dsh_app.runtime
 
+import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class SpeechGuestTest {
@@ -53,6 +58,58 @@ class SpeechGuestTest {
             assertFalse(root.resolve("opt/dsh-app").listFiles()!!.any { it.name.endsWith(".tmp") })
         } finally {
             root.deleteRecursively()
+        }
+    }
+
+    @Test fun searchOverlayReplacesAFifoWithoutReadingIt() = replacesFifo(
+        SessionSearchGuest::file, SessionSearchGuest::writeFiles, SessionSearchGuest.PATCH_YAML,
+    )
+
+    @Test fun speechOverlayReplacesAFifoWithoutReadingIt() = replacesFifo(
+        SpeechGuest::file, SpeechGuest::writeFiles, SpeechGuest.PATCH_YAML,
+    )
+
+    /** Linux O_RDWR keeps the FIFO readable but without EOF until cleanup. */
+    private fun replacesFifo(target: (File) -> File, write: (File) -> Boolean, yaml: String) {
+        assumeTrue("FIFO regression requires Linux", System.getProperty("os.name").startsWith("Linux"))
+        val root = Files.createTempDirectory("overlay-fifo").toFile()
+        val file = target(root)
+        val worker = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "overlay-fifo-test").apply { isDaemon = true }
+        }
+        var keeper: RandomAccessFile? = null
+        try {
+            assertTrue(file.parentFile!!.mkdirs())
+            val mkfifo = ProcessBuilder("mkfifo", file.path).start()
+            try {
+                assertTrue("mkfifo timed out", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                assertEquals(0, mkfifo.exitValue())
+            } finally {
+                if (mkfifo.isAlive) {
+                    mkfifo.destroyForcibly()
+                    assertTrue("mkfifo did not stop", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                }
+            }
+            keeper = RandomAccessFile(file, "rw")
+            assertTrue(worker.submit<Boolean> { write(root) }.get(5, TimeUnit.SECONDS))
+            assertTrue(file.isFile)
+            assertEquals(yaml, file.readText())
+            assertFalse(file.parentFile!!.listFiles()!!.any { it.name.endsWith(".tmp") })
+        } finally {
+            try {
+                // Unlink first: even a late reader cannot newly open the FIFO.
+                assertTrue(!file.exists() || file.delete())
+            } finally {
+                try { keeper?.close() } finally {
+                    worker.shutdown()
+                    try {
+                        assertTrue("overlay writer did not stop", worker.awaitTermination(5, TimeUnit.SECONDS))
+                    } finally {
+                        worker.shutdownNow()
+                        root.deleteRecursively()
+                    }
+                }
+            }
         }
     }
 }
