@@ -6,6 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duplex } from "node:stream";
+import { performance } from "node:perf_hooks";
 
 const LIB = new URL("../bridge/dsh-go-bridge/lib/native/", import.meta.url);
 const { checkManifest, parseManifest, renderPlugin } = await import(new URL("manifest.js", LIB));
@@ -352,7 +353,7 @@ test("core: feeds coalesce to 4 Hz, send patches, linger then cancel", async () 
   const got = [];
   feed.attach({ id: "s1", send: (m) => got.push(m) }, undefined);
   assert.equal(got[0].t, "data");
-  const t0 = Date.now();
+  const t0 = performance.now();
   for (let i = 1; i <= 10; i++) emit({ n: i, keep: "k" });
   await new Promise((r) => setTimeout(r, 600));
   const patches = got.filter((m) => m.t === "patch");
@@ -361,7 +362,7 @@ test("core: feeds coalesce to 4 Hz, send patches, linger then cancel", async () 
   assert.equal(patches[0].base, got[0].rev);
   for (let i = 0; i < 6; i++) { emit({ n: 100 + i, keep: "k" }); await new Promise((r) => setTimeout(r, 40)); }
   await new Promise((r) => setTimeout(r, 400));
-  const span = Date.now() - t0;
+  const span = performance.now() - t0;
   const all = got.filter((m) => m.t === "patch").length;
   assert.ok(all <= Math.ceil(span / 250) + 1, `${all} patches in ${span} ms respects 4 Hz`);
   emit({ blob: "x".repeat(LIMITS.dataBytes + 10) });
