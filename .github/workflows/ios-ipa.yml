@@ -8,8 +8,9 @@
 # The .ipa lands both as a 14-day artifact and as an asset on a `ios-unsigned-*`
 # release, so a sideloading tool can fetch it without a GitHub session.
 #
-# macos-26 capacity is tight: a run can sit queued and then be cancelled before it
-# starts. Re-pushing this file is the retry.
+# macos-26 capacity is tight: a run can sit queued for ~15 minutes and then be
+# cancelled before it starts. Runs are therefore not cancelled by newer pushes —
+# re-pushing this file queues one more attempt instead of dropping the pending one.
 name: iOS IPA (unsigned)
 
 on:
@@ -35,7 +36,7 @@ permissions:
 
 concurrency:
   group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # Defaults for the `push` trigger, where there are no inputs.
