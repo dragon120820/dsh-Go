@@ -1,5 +1,6 @@
 package io.github.ccch1mneyyy.dsh_app.runtime
 
+import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -203,7 +204,7 @@ object LastKnownGood {
      */
     private fun <T> withLock(file: File, busyConfig: String, block: () -> T): T {
         val lock = File(file.path + ".lock")
-        val deadline = System.currentTimeMillis() + 3000
+        val deadline = SystemClock.elapsedRealtime() + 3000
         while (true) {
             if (lock.createNewFile()) {
                 break
@@ -216,7 +217,7 @@ object LastKnownGood {
             if (holder != null && !File("/proc/$holder").exists()) {
                 if (lock.delete()) continue
             }
-            if (System.currentTimeMillis() > deadline) throw IllegalStateException(busyConfig)
+            if (SystemClock.elapsedRealtime() > deadline) throw IllegalStateException(busyConfig)
             Thread.sleep(50)
         }
         try {
