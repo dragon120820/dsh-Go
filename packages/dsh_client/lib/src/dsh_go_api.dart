@@ -1107,7 +1107,7 @@ class _MicroSubscription {
   String? _epoch;
   int _seq = 0;
   String? _delivered;
-  DateTime? _last;
+  Stopwatch? _sinceDelivery;
   DshGoData? _pending;
   Timer? _timer;
 
@@ -1118,7 +1118,7 @@ class _MicroSubscription {
     _epoch = null;
     _seq = 0;
     _delivered = null;
-    _last = null;
+    _sinceDelivery = null;
     sentEpoch = -1;
   }
 
@@ -1130,8 +1130,8 @@ class _MicroSubscription {
     _epoch = match.group(1);
     _seq = seq;
     _pending = event;
-    final last = _last;
-    final wait = last == null ? Duration.zero : const Duration(milliseconds: 100) - DateTime.now().difference(last);
+    final elapsed = _sinceDelivery?.elapsed;
+    final wait = elapsed == null ? Duration.zero : const Duration(milliseconds: 100) - elapsed;
     if (wait <= Duration.zero) {
       _flush();
     } else {
@@ -1147,7 +1147,7 @@ class _MicroSubscription {
     final encoded = jsonEncode(event.data);
     if (encoded == _delivered) return;
     _delivered = encoded;
-    _last = DateTime.now();
+    _sinceDelivery = Stopwatch()..start();
     controller.add(event);
   }
 }
