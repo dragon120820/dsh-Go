@@ -187,9 +187,10 @@ export function createDeletionSeam(storage, { acquire, parseGeneration, notFound
           storage.migrationPreparations.delete(id);
           for (const path of files) await rm(path, { force: true });
           await syncDir(dir);
-          await hooks.cleanup();
-          storage.ctx.emit('dsh-go/session-deleted', id);
         });
+        // Workspace cleanup can wait for a stop provider that needs the mutation lease.
+        await hooks.cleanup();
+        storage.ctx.emit('dsh-go/session-deleted', id);
       } finally {
         try { await artifact?.release(); }
         finally {
