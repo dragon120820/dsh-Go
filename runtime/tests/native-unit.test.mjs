@@ -280,6 +280,25 @@ test("core: scan, cache invalidation by toggle and package.json edit", async () 
   core.dispose();
 });
 
+for (const rollback of [false, true]) test(`core: scan cache expires after elapsed time, rollback=${rollback}`, async (t) => {
+  const fixture = pkgDir(`scan-clock-${rollback}`, { v: 1, title: "Before", contributes: {} });
+  const host = fakeHost([fixture]);
+  const core = new NativeCore(host.ctx, LIMITS, "test");
+  t.after(() => core.dispose());
+  const before = core.contributions(CAPS);
+  assert.equal(before.plugins[0].title, "Before");
+  const clock = Date.now;
+  if (rollback) t.mock.method(Date, "now", () => clock() - 60_000);
+  writeFileSync(join(fixture.dir, "package.json"), JSON.stringify({
+    ...fixture.pkg, dshGo: { v: 1, title: "After update", contributes: {} },
+  }));
+  assert.equal(core.contributions(CAPS), before, "unchanged two-second cache before expiry");
+  await new Promise((resolve) => setTimeout(resolve, 2100));
+  const after = core.contributions(CAPS);
+  assert.equal(after.plugins[0].title, "After update", "manifest edit must become visible after the scan cache expires");
+  assert.notEqual(after.rev, before.rev);
+});
+
 test("core: service attribution, registration lifecycle, undeclared", () => {
   const a = pkgDir("svc-a", { v: 1, contributes: { panels: [{ id: "p", title: "P" }], "composer.actions": [{ id: "x", label: "X" }] } });
   const host = fakeHost([a]);

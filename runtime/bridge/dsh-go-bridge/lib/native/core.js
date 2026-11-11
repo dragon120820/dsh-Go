@@ -145,7 +145,7 @@ export class NativeCore {
 
   /** Enabled plugins that declare dshGo: Map pkg -> {pkg, dir, uid, parsed, stamp}. */
   scan() {
-    const now = Date.now();
+    const now = performance.now();
     if (!this.dirty && this.scanState && now - this.scanState.at < SCAN_MAX_AGE_MS) return this.scanState;
     const plugins = new Map();
     const parts = [];
