@@ -193,6 +193,11 @@ class ApkDownloader {
       onVerifying: onVerifying,
       cancel: cancel,
     );
+    if (got is DownloadFailed) {
+      // Falling back to the whole APK retires this release's patch, unlike cancellation.
+      await _deleteQuietly(File('${directory.path}/${patch.name}'));
+      await _deleteQuietly(File('${directory.path}/${patch.name}.part'));
+    }
     if (got is! DownloadDone) return got;
     final target = File('${directory.path}/$fileName');
     // Built in the full download's `.part`: a build cut short leaves the start
