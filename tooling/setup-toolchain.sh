@@ -55,7 +55,11 @@ install_cmdline_tools() {
 install_jdk & p1=$!
 install_flutter & p2=$!
 install_cmdline_tools & p3=$!
-wait $p1 && wait $p2 && wait $p3
+install_status=0
+for installer_pid in "$p1" "$p2" "$p3"; do
+  wait "$installer_pid" || install_status=$?
+done
+((install_status == 0)) || exit "$install_status"
 
 export JAVA_HOME="$JDK_DIR"
 export ANDROID_HOME="$SDK_DIR" ANDROID_SDK_ROOT="$SDK_DIR"
