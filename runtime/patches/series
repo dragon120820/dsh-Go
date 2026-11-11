@@ -125,3 +125,4 @@ zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-phone-run-end-retry.diff
 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-phone-run-end-live-retry.diff
 mcp-reconnect-elapsed.diff
 subprocess-pty-grace-clock.diff
+terminal-job-cancel.diff
