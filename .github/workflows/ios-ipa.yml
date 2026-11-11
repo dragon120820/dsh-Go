@@ -4,6 +4,9 @@
 #
 # The workflow lives on this fork's `main` so that `workflow_dispatch` can find it;
 # the code it compiles is checked out from ccch1mneyyy/dsh-Go.
+#
+# The .ipa lands both as a 14-day artifact and as an asset on a `ios-unsigned-*`
+# release, so a sideloading tool can fetch it without a GitHub session.
 name: iOS IPA (unsigned)
 
 on:
