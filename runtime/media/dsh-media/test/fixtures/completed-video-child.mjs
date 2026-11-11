@@ -142,7 +142,7 @@ try {
   const initial = await registered.get('generate_video').execute({prompt: 'synthetic blue circle'}, exec);
   assert.equal(initial.meta.status, 'running');
   outcome = await hooks.done;
-  const result = registered.get('get_media_result').execute({job_id: initial.meta.job}, exec);
+  const result = await registered.get('get_media_result').execute({job_id: initial.meta.job}, exec);
   const ledger = await createBudgetLedger(join(hostStateDir, 'budget')).snapshot();
   assert.equal(ledger.requests.length, 1);
   const saved = ledger.requests[0];
