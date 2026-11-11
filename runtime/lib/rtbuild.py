@@ -6,6 +6,8 @@ Runs with `python3 -I` on the build host (any arch). Never executes anything fro
 inputs it reads; downloaded archives are treated as data.
 """
 import argparse
+import errno
+import tempfile
 import gzip
 import hashlib
 import io
@@ -418,9 +420,33 @@ def cmd_patch_dsh(args):
             pins["patches"].setdefault(name, {})[args.dsh_version] = observed
         applied.append(name)
     if args.record:
-        with open(pins_path, "w") as f:
-            json.dump(pins, f, indent=2, sort_keys=True)
-            f.write("\n")
+        staging = None
+        try:
+            existing = os.lstat(pins_path)
+        except FileNotFoundError:
+            existing = None
+        # Keep links' in-place semantics; ordinary files can be published whole.
+        if existing is None or (stat.S_ISREG(existing.st_mode) and existing.st_nlink == 1):
+            if existing is not None:
+                os.close(os.open(pins_path, os.O_WRONLY))  # do not bypass the target's write permission
+            try:
+                staging = tempfile.TemporaryDirectory(prefix=".dsh-pins-", dir=args.patches)
+            except OSError as exc:
+                # An existing writable file may live in a non-writable directory.
+                if existing is None or exc.errno != errno.EACCES:
+                    raise
+        try:
+            output = os.path.join(staging.name, "pins.json") if staging else pins_path
+            with open(output, "w") as f:
+                json.dump(pins, f, indent=2, sort_keys=True)
+                f.write("\n")
+            if staging:
+                if existing is not None:
+                    os.chmod(output, stat.S_IMODE(existing.st_mode))
+                os.replace(output, pins_path)
+        finally:
+            if staging:
+                staging.cleanup()
         print("recorded pins for DSH %s in %s" % (args.dsh_version, pins_path))
     if "zzzzzz-session-deletion.diff" in applied:
         # Source-owned companion module, installed only alongside the vetted rc4 seam.

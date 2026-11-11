@@ -109,6 +109,160 @@ class PatchDsh(unittest.TestCase):
         self.assertEqual(read(link), ORIGINAL)
         self.assertEqual(load(os.path.join(self.tmp.name, "applied.json")), ["guard.diff"])
 
+    def record_fixture(self, existing=True):
+        with open(self.target, "w") as out:
+            out.write("before\n")
+        with open(os.path.join(self.patches, "guard.diff"), "w") as out:
+            out.write("--- a/%s\n+++ b/%s\n@@ -1,1 +1,1 @@\n-before\n+after\n" % (REL, REL))
+        pins = {"schema": 1, "patches": {"guard.diff": {
+            "old-%d" % i: {REL: {"before": "1" * 64, "after": "2" * 64}} for i in range(5)
+        }}}
+        path = os.path.join(self.patches, "pins.json")
+        if existing:
+            with open(path, "w") as out:
+                json.dump(pins, out, indent=2, sort_keys=True)
+                out.write("\n")
+        return path, pins
+
+    def run_record(self, limit=None, umask=0o022):
+        def setup_child():
+            os.umask(umask)
+            if limit is not None:
+                import resource
+                import signal
+                signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+                resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+        return subprocess.run([sys.executable, "-I", RTBUILD, "patch-dsh", "--prefix", "prefix",
+                               "--patches", "patches", "--dsh-version", "new", "--record"],
+                              cwd=self.tmp.name, preexec_fn=setup_child, timeout=10,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux file-size limit")
+    def test_record_write_failure_preserves_previous_pins(self):
+        path, previous = self.record_fixture()
+        before = read(path)
+        entries = sorted(os.listdir(self.patches))
+        result = self.run_record(limit=256)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[Errno 27]", result.stdout)
+        self.assertEqual(read(self.target), "after\n")  # pins publication does not roll back the prefix
+        self.assertEqual(read(path), before)
+        self.assertEqual(sorted(os.listdir(self.patches)), entries)
+        retry = self.run_record()
+        self.assertNotEqual(retry.returncode, 0)
+        self.assertIn("matches 0 places", retry.stdout)
+        self.assertEqual(read(path), before)
+        with open(self.target, "w") as out:
+            out.write("before\n")
+        recovered = self.run_record()
+        self.assertEqual(recovered.returncode, 0, recovered.stdout)
+        for version, pin in previous["patches"]["guard.diff"].items():
+            self.assertEqual(load(path)["patches"]["guard.diff"][version], pin)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux file-size limit")
+    def test_record_write_failure_does_not_publish_new_pins(self):
+        path, _ = self.record_fixture(existing=False)
+        entries = sorted(os.listdir(self.patches))
+        result = self.run_record(limit=256)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[Errno 27]", result.stdout)
+        self.assertEqual(read(self.target), "after\n")
+        self.assertFalse(os.path.lexists(path))
+        self.assertEqual(sorted(os.listdir(self.patches)), entries)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux mode and child umask")
+    def test_record_preserves_format_versions_and_existing_mode(self):
+        path, expected = self.record_fixture()
+        entries = sorted(os.listdir(self.patches))
+        os.chmod(path, 0o640)
+        result = self.run_record(umask=0o077)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        expected["patches"]["guard.diff"]["new"] = {REL: {"before": sha("before\n"), "after": sha("after\n")}}
+        self.assertEqual(read(path), json.dumps(expected, indent=2, sort_keys=True) + "\n")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o640)
+        self.assertEqual(sorted(os.listdir(self.patches)), entries)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux mode and child umask")
+    def test_record_new_pins_respects_umask(self):
+        path, _ = self.record_fixture(existing=False)
+        result = self.run_record(umask=0o027)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o640)
+        self.assertEqual(load(path)["patches"]["guard.diff"]["new"][REL],
+                         {"before": sha("before\n"), "after": sha("after\n")})
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux symlink and hardlink semantics")
+    def test_record_links_keep_in_place_semantics(self):
+        path = os.path.join(self.patches, "pins.json")
+        for kind in ("relative", "dangling", "hard"):
+            with self.subTest(kind=kind):
+                if os.path.lexists(path):
+                    os.unlink(path)
+                _, previous = self.record_fixture(existing=kind != "dangling")
+                alias = os.path.join(self.patches, kind + "-pins.json")
+                if kind == "hard":
+                    os.link(path, alias)
+                    inode = os.stat(path).st_ino
+                else:
+                    if kind == "relative":
+                        os.replace(path, alias)
+                    os.symlink(os.path.basename(alias), path)
+                result = self.run_record()
+                self.assertEqual(result.returncode, 0, result.stdout)
+                if kind == "hard":
+                    self.assertEqual(os.stat(path).st_ino, inode)
+                    self.assertEqual(os.stat(alias).st_ino, inode)
+                else:
+                    self.assertTrue(os.path.islink(path))
+                    self.assertEqual(os.readlink(path), os.path.basename(alias))
+                recorded = load(alias)["patches"]["guard.diff"]
+                self.assertEqual(recorded["new"][REL], {"before": sha("before\n"), "after": sha("after\n")})
+                if kind != "dangling":
+                    for version, pin in previous["patches"]["guard.diff"].items():
+                        self.assertEqual(recorded[version], pin)
+
+    @unittest.skipUnless(sys.platform == "linux" and os.geteuid() != 0, "Linux non-root permission check")
+    def test_record_readonly_pins_is_not_replaced_via_directory_permission(self):
+        path, _ = self.record_fixture()
+        before = read(path)
+        os.chmod(path, 0o444)
+        try:
+            result = self.run_record()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("[Errno 13]", result.stdout)
+            self.assertEqual(read(path), before)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o444)
+        finally:
+            os.chmod(path, 0o644)
+
+    @unittest.skipUnless(sys.platform == "linux" and os.geteuid() != 0, "Linux non-root permission check")
+    def test_record_readonly_parent_keeps_existing_file_writable(self):
+        path, _ = self.record_fixture()
+        inode = os.stat(path).st_ino
+        os.chmod(self.patches, 0o555)
+        try:
+            result = self.run_record()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(os.stat(path).st_ino, inode)
+            self.assertIn("new", load(path)["patches"]["guard.diff"])
+        finally:
+            os.chmod(self.patches, 0o755)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux hardlink and file-size limit")
+    def test_record_link_write_failure_retains_original_nonatomic_behavior(self):
+        path, _ = self.record_fixture()
+        before = read(path)
+        alias = os.path.join(self.patches, "hard-pins.json")
+        os.link(path, alias)
+        result = self.run_record(limit=256)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[Errno 27]", result.stdout)
+        self.assertEqual(os.stat(path).st_ino, os.stat(alias).st_ino)
+        self.assertEqual(len(read(path)), 256)
+        self.assertNotEqual(read(path), before)
+        self.assertEqual(read(alias), read(path))
+
     def test_unpinned_version_fails(self):
         self.run_cli("--dsh-version", "1.0.0", "--record")
         with open(self.target, "w") as f:
