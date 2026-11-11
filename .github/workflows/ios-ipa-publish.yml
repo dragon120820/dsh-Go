@@ -1,0 +1,47 @@
+# Republishes an already-built artifact as a public release asset.
+#
+# `actions/upload-artifact` output needs a signed-in GitHub session to download,
+# which a sideloading tool does not have. This job only moves bytes: it runs on
+# ubuntu and never builds anything, so it is not subject to macos-26 capacity.
+name: Publish an existing IPA artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run id of the iOS IPA (unsigned) build to republish'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name DSH-Go-unsigned-ipa \
+            --dir out
+          ls -lh out
+          test -f out/DSH-Go-unsigned.ipa
+          echo "sha256: $(sha256sum out/DSH-Go-unsigned.ipa | cut -d' ' -f1)"
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          tag="ios-unsigned-run${RUN_ID}"
+          gh release create "$tag" "out/DSH-Go-unsigned.ipa#DSH-Go-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Unsigned iOS build (run ${RUN_ID})" \
+            --notes "Unsigned .ipa republished from workflow run ${RUN_ID}. Signing needs a personal Apple ID (AltStore, Sideloadly, or Xcode); a free Personal Team signature expires after 7 days."
+          echo "::notice title=release::https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
