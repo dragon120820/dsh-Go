@@ -110,7 +110,7 @@ object GuestSetup {
     ) {
         try {
             val file = File(rootfs, "root/.dsh/AGENTS.md")
-            if (file.exists() && !file.readText().startsWith(AGENTS_MARKER)) return
+            if (file.exists() && (!file.isFile || !file.readText().startsWith(AGENTS_MARKER))) return
             val environment = if (directEngine) {
                 // l10n:keep agent prompt
                 AGENTS_MD.replace("Ubuntu 24.04 环境里（proot，免 Root）", "Ubuntu 24.04 运行环境里（引擎直接启动，bash/git/python/apt 工具仍经 proot）")

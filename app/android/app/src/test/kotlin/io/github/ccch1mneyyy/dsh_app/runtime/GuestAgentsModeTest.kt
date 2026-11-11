@@ -1,7 +1,12 @@
 package io.github.ccch1mneyyy.dsh_app.runtime
 
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class GuestAgentsModeTest {
@@ -32,6 +37,52 @@ class GuestAgentsModeTest {
                 assertArrayEquals(original, file.readBytes())
             }
         } finally { root.deleteRecursively() }
+    }
+
+    @Test fun fifoInstructionsRemainUserOwnedWithoutReading() {
+        assumeTrue("FIFO regression requires Linux", System.getProperty("os.name").startsWith("Linux"))
+        val root = kotlin.io.path.createTempDirectory("agents-fifo-").toFile()
+        val file = File(root, "root/.dsh/AGENTS.md")
+        val worker = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "agents-fifo-test").apply { isDaemon = true }
+        }
+        var keeper: RandomAccessFile? = null
+        try {
+            assertTrue(file.parentFile!!.mkdirs())
+            val mkfifo = ProcessBuilder("mkfifo", file.path).start()
+            try {
+                assertTrue("mkfifo timed out", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                assertEquals(0, mkfifo.exitValue())
+            } finally {
+                if (mkfifo.isAlive) {
+                    mkfifo.destroyForcibly()
+                    assertTrue("mkfifo did not stop", mkfifo.waitFor(5, TimeUnit.SECONDS))
+                }
+            }
+            val inode = Files.getAttribute(file.toPath(), "unix:ino")
+            keeper = RandomAccessFile(file, "rw")
+            worker.submit<Unit> {
+                GuestSetup.writeAgentsMd(root, phoneStorage = false)
+            }.get(5, TimeUnit.SECONDS)
+            assertEquals(inode, Files.getAttribute(file.toPath(), "unix:ino"))
+            assertEquals(0x1000, (Files.getAttribute(file.toPath(), "unix:mode") as Int) and 0xf000)
+        } finally {
+            try {
+                try {
+                    // Unlink before releasing EOF so a late reader cannot open the FIFO again.
+                    assertTrue(!file.exists() || file.delete())
+                } finally {
+                    try { keeper?.close() } finally {
+                        worker.shutdown()
+                        try {
+                            assertTrue("agents writer did not stop", worker.awaitTermination(5, TimeUnit.SECONDS))
+                        } finally {
+                            if (!worker.isTerminated) worker.shutdownNow()
+                        }
+                    }
+                }
+            } finally { root.deleteRecursively() }
+        }
     }
 
     @Test fun phoneStorageSendsOutputsToTheDshGoFolder() {
